@@ -10,7 +10,7 @@ final class WordPressLinkTargetService implements ILinkTargetService {
 		$named = [
 			'action' => 'base3_dispatch',
 			'name' => (string) ($target['name'] ?? ''),
-			'out' => (string) ($target['out'] ?? 'php')
+			'out' => (string) ($target['out'] ?? $params['out'] ?? 'php')
 		];
 		// action belongs to WordPress for routing. BASE3 receives the original
 		// argument via WordPressRequest after WordPress has dispatched the call.

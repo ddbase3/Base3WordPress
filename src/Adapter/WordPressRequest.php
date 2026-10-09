@@ -4,11 +4,18 @@ namespace Base3WordPress\Adapter;
 
 use Base3\Core\Request;
 
-/** Maps WordPress's reserved AJAX action parameter to the BASE3 request contract. */
+/** Maps WordPress request values and its reserved AJAX action to the BASE3 request contract. */
 final class WordPressRequest extends Request {
 
 	public function initFromGlobals(): void {
 		parent::initFromGlobals();
+
+		// WordPress adds slashes to request globals. BASE3 expects their original values.
+		$this->get = wp_unslash($this->get);
+		$this->post = wp_unslash($this->post);
+		$this->cookie = wp_unslash($this->cookie);
+		$this->server = wp_unslash($this->server);
+
 		$viaGet = ($this->get['action'] ?? null) === 'base3_dispatch';
 		$viaPost = ($this->post['action'] ?? null) === 'base3_dispatch';
 		if (!$viaGet && !$viaPost) return;

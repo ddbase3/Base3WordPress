@@ -17,7 +17,6 @@ use Base3\Database\Api\IDatabase;
 use Base3\Event\Api\IEventManager;
 use Base3\Event\EventManager;
 use Base3\Language\Api\ILanguage;
-use Base3\Logger\Api\ILogger;
 use Base3\Session\Api\ISession;
 use Base3\Translation\Api\ITranslation;
 use Base3\Usermanager\Api\IUsermanager;
@@ -28,7 +27,6 @@ use Base3WordPress\Adapter\WordPressConfiguration;
 use Base3WordPress\Adapter\WordPressDatabase;
 use Base3WordPress\Adapter\WordPressFileStorageFactory;
 use Base3WordPress\Adapter\WordPressLanguage;
-use Base3WordPress\Adapter\WordPressLogger;
 use Base3WordPress\Adapter\WordPressManagedFileStorageService;
 use Base3WordPress\Adapter\WordPressMvcView;
 use Base3WordPress\Adapter\WordPressSession;
@@ -51,8 +49,6 @@ final class Base3WordPressPlugin implements IPlugin, IBase {
 			->set('configuration', IConfiguration::class, IContainer::ALIAS)
 			->set(IDatabase::class, fn() => new WordPressDatabase(), IContainer::SHARED)
 			->set('database', IDatabase::class, IContainer::ALIAS)
-			->set(ILogger::class, fn() => new WordPressLogger(), IContainer::SHARED)
-			->set('logger', ILogger::class, IContainer::ALIAS)
 			->set(ISession::class, fn() => new WordPressSession(), IContainer::SHARED)
 			->set('session', ISession::class, IContainer::ALIAS)
 			->set(IAccesscontrol::class, fn() => new WordPressAccesscontrol(), IContainer::SHARED)

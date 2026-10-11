@@ -24,6 +24,12 @@ final class WordPressLinkTargetService implements ILinkTargetService {
 		if (current_user_can('manage_options')) {
 			$named['_wpnonce'] = wp_create_nonce('base3_admin_display');
 		}
-		return add_query_arg(array_merge($named, $params), admin_url('admin-ajax.php'));
+		$url = add_query_arg(array_merge($named, $params), admin_url('admin-ajax.php'));
+		// WordPress removes the '=' from empty query parameters. BASE3 links
+		// with an open action value must keep it for the caller to append the action.
+		if (($params['base3_action'] ?? null) === '') {
+			$url = preg_replace('/([?&]base3_action)(?=&|#|$)/', '$1=', $url) ?? $url;
+		}
+		return $url;
 	}
 }

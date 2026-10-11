@@ -1,0 +1,26 @@
+[Unit]
+Description=BASE3 Worker - wordpress.base3.de
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=12
+
+[Service]
+Type=simple
+# Docker API access on the host is root-equivalent. PHP runs as www-data in the container.
+User=root
+Group=root
+WorkingDirectory=/srv/sites/base3.de/wordpress.base3.de
+ExecStart=/usr/bin/docker exec -u www-data -w /var/www/html -e BASE3_WORKER_HOST=wordpress.base3.de -e BASE3_WORKER_DOCUMENT_ROOT=/var/www/html docker-site-wordpress-base3-de-apache /bin/sh /var/www/html/wp-content/plugins/base3-wordpress/modules/Base3WordPress/deploy/docker/worker-run.sh
+ExecStop=/usr/bin/docker exec -u www-data -w /var/www/html docker-site-wordpress-base3-de-apache /bin/sh /var/www/html/wp-content/plugins/base3-wordpress/modules/Base3WordPress/deploy/docker/worker-stop.sh
+Restart=on-failure
+RestartSec=15
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

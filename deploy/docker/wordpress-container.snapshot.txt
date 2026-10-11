@@ -1,0 +1,12 @@
+# Docker configuration inventory: docker-site-wordpress-base3-de-apache
+# NO environment, container files, credentials, secrets or volume contents.
+name: /docker-site-wordpress-base3-de-apache
+image_reference: wordpress:php8.2-apache
+image_id: sha256:d2ba8c67f9261f0f9e34cb7a6accaf96c78d4cdf4d97fd581711def3b863e24b
+restart_policy: unless-stopped
+network_mode: proxy
+mounts:
+/srv/sites/base3.de/wordpress.base3.de -> /var/www/html (bind)
+
+port_bindings:
+

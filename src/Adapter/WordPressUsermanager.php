@@ -3,13 +3,19 @@
 namespace Base3WordPress\Adapter;
 
 use Base3\Usermanager\Api\IUsermanager;
-use Base3\Usermanager\Group;
 use Base3\Usermanager\Permission;
 use Base3\Usermanager\Role;
 use Base3\Usermanager\User;
+use Base3\Usermanager\UserCriterionEvaluator;
+use Base3WordPress\Service\WordPressGroupConfiguration;
 
 /** WordPress users, native roles and capabilities exposed through BASE3 RBAC contracts. */
 final class WordPressUsermanager implements IUsermanager {
+
+	public function __construct(
+		private readonly WordPressGroupConfiguration $groupConfiguration,
+		private readonly UserCriterionEvaluator $evaluator
+	) {}
 
 	public function getUser() {
 		return $this->userObject(wp_get_current_user());
@@ -20,9 +26,16 @@ final class WordPressUsermanager implements IUsermanager {
 	}
 
 	public function getGroups() {
-		$groupNames = get_current_user_id() > 0 ? ['authenticated'] : ['anonymous'];
-		if (current_user_can('manage_options')) $groupNames[] = 'administration';
-		return array_map([$this, 'groupObject'], $groupNames);
+		$user = $this->getUser();
+		$groups = [];
+		foreach ($this->groupConfiguration->getEntries() as $entry) {
+			try {
+				if ($this->evaluator->matches($user, $entry['criteria'])) $groups[] = $entry['group'];
+			} catch (\InvalidArgumentException) {
+				// Invalid persisted criteria must never grant additional memberships.
+			}
+		}
+		return $groups;
 	}
 
 	public function getRoles() {
@@ -42,23 +55,7 @@ final class WordPressUsermanager implements IUsermanager {
 	}
 
 	public function hasRole(Role $role): bool {
-		$name = (string) ($role->name ?? '');
-		if ($name === 'admin') return current_user_can('manage_options');
-		return in_array($name, wp_get_current_user()->roles, true);
-	}
-
-	public function can(Permission $permission): bool {
-		$scope = strtolower((string) $permission->scope);
-		$capability = trim((string) $permission->permission);
-		if ($capability === '') return false;
-		if ($scope === 'system' && $capability === 'admin') return current_user_can('manage_options');
-		if ($scope === 'entry' && $capability === 'admin') return current_user_can('manage_options');
-		if ($scope === 'wordpress') {
-			return $permission->target !== null
-				? current_user_can($capability, $permission->target)
-				: current_user_can($capability);
-		}
-		return false;
+		return in_array((string)($role->name ?? ''), wp_get_current_user()->roles, true);
 	}
 
 	public function registUser($userid, $password, $data = null) {
@@ -80,7 +77,7 @@ final class WordPressUsermanager implements IUsermanager {
 	}
 
 	public function getAllGroups() {
-		return array_map([$this, 'groupObject'], ['anonymous', 'authenticated', 'administration']);
+		return $this->groupConfiguration->getGroups();
 	}
 
 	public function getAllRoles() {
@@ -119,7 +116,7 @@ final class WordPressUsermanager implements IUsermanager {
 	public function revokeRoleFromGroup($groupid, Role $role): bool { return false; }
 
 	public function addPermissionToRole(Role $role, Permission $permission): bool {
-		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress' || $permission->target !== null) return false;
+		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress') return false;
 		$wpRole = get_role((string) $role->name);
 		if ($wpRole === null) return false;
 		$wpRole->add_cap((string) $permission->permission, true);
@@ -127,7 +124,7 @@ final class WordPressUsermanager implements IUsermanager {
 	}
 
 	public function removePermissionFromRole(Role $role, Permission $permission): bool {
-		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress' || $permission->target !== null) return false;
+		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress') return false;
 		$wpRole = get_role((string) $role->name);
 		if ($wpRole === null) return false;
 		$wpRole->remove_cap((string) $permission->permission);
@@ -147,9 +144,6 @@ final class WordPressUsermanager implements IUsermanager {
 		]);
 	}
 
-	private function groupObject(string $name): Group {
-		return Group::fromArray(['id' => $name, 'name' => $name, 'info' => 'BASE3 derived group', 'roles' => []]);
-	}
 
 	private function roleObject(string $name): Role {
 		$role = get_role($name);

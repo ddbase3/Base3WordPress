@@ -20,6 +20,15 @@ use Base3\Language\Api\ILanguage;
 use Base3\Session\Api\ISession;
 use Base3\Translation\Api\ITranslation;
 use Base3\Usermanager\Api\IUsermanager;
+use Base3\Usermanager\UserCriterionEvaluator;
+use Base3\Authorization\Api\IAuthorizationService;
+use Base3\Authorization\Api\IAuthorizationAdministrationService;
+use Base3\Settings\Api\ISettingsStore;
+use Base3WordPress\Authorization\WordPressAuthorizationService;
+use Base3WordPress\Authorization\WordPressAuthorizationAdministrationService;
+use Base3WordPress\Service\WordPressFeatureConfiguration;
+use Base3WordPress\Service\WordPressGroupConfiguration;
+use Base3WordPress\Service\WordPressAudienceEditor;
 use Base3\Worker\DelegateWorker;
 use Base3WordPress\Adapter\WordPressAccesscontrol;
 use Base3WordPress\Adapter\WordPressAssetResolver;
@@ -55,7 +64,24 @@ final class Base3WordPressPlugin implements IPlugin, IBase {
 			->set('session', ISession::class, IContainer::ALIAS)
 			->set(IAccesscontrol::class, fn() => new WordPressAccesscontrol(), IContainer::SHARED)
 			->set('accesscontrol', IAccesscontrol::class, IContainer::ALIAS)
-			->set(IUsermanager::class, fn() => new WordPressUsermanager(), IContainer::SHARED)
+			->set(UserCriterionEvaluator::class, fn($c) => new UserCriterionEvaluator($c->get(IClassMap::class)), IContainer::SHARED)
+			->set(WordPressFeatureConfiguration::class, fn($c) => new WordPressFeatureConfiguration(
+				$c->get(ISettingsStore::class), $c->get(IClassMap::class), $c->get(UserCriterionEvaluator::class)
+			), IContainer::SHARED)
+			->set(WordPressGroupConfiguration::class, fn($c) => new WordPressGroupConfiguration(
+				$c->get(ISettingsStore::class), $c->get(IClassMap::class),
+				$c->get(UserCriterionEvaluator::class), $c->get(WordPressFeatureConfiguration::class)
+			), IContainer::SHARED)
+			->set(WordPressAudienceEditor::class, fn($c) => new WordPressAudienceEditor(
+				$c->get(IClassMap::class), $c->get(UserCriterionEvaluator::class)
+			), IContainer::SHARED)
+			->set(IUsermanager::class, fn($c) => new WordPressUsermanager(
+				$c->get(WordPressGroupConfiguration::class), $c->get(UserCriterionEvaluator::class)
+			), IContainer::SHARED)
+			->set(IAuthorizationService::class, fn($c) => new WordPressAuthorizationService(
+				$c->get(IUsermanager::class), $c->get(WordPressFeatureConfiguration::class), $c->get(UserCriterionEvaluator::class)
+			), IContainer::SHARED)
+			->set(IAuthorizationAdministrationService::class, fn() => new WordPressAuthorizationAdministrationService(), IContainer::SHARED)
 			->set('usermanager', IUsermanager::class, IContainer::ALIAS)
 			->set(ILanguage::class, fn() => new WordPressLanguage(), IContainer::SHARED)
 			->set(ITranslation::class, fn($c) => new WordPressTranslation($c->get(ILanguage::class), $c->get(IModuleRegistry::class)), IContainer::SHARED)

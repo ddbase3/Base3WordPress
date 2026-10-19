@@ -32,8 +32,24 @@ namespace Base3\Usermanager {
 
 namespace Base3\Usermanager\Api {
 	interface IUsermanager {
-		public function can(\Base3\Usermanager\Permission $permission): bool;
 		public function getUser(): ?object;
+		public function getGroups(): array;
+	}
+}
+
+namespace Base3\Authorization\Dto {
+	final class AuthorizationRequest {
+		public function __construct(public string $authority, public \Base3\Usermanager\Permission $permission) {}
+	}
+	final class AuthorizationDecision {
+		public function __construct(private bool $allowed) {}
+		public function isAllowed(): bool { return $this->allowed; }
+	}
+}
+namespace Base3\Authorization\Api {
+	interface IAuthorizationService {
+		public function getDefaultAuthority(): string;
+		public function decide(\Base3\Authorization\Dto\AuthorizationRequest $request): \Base3\Authorization\Dto\AuthorizationDecision;
 	}
 }
 
@@ -52,6 +68,7 @@ namespace Base3\LinkTarget\Api {
 namespace Base3WordPress\Api {
 	interface IBase3WordPressSettings {
 		public function getAdministrationConfig(): array;
+		public function getAdministrationAccessLevel(string $name): ?string;
 	}
 }
 
@@ -98,6 +115,9 @@ namespace Base3WordPressBridge {
 			return '{"message":"denied"}';
 		}
 	}
+	final class AdminBridge {
+		public static function canDispatch(string $name, bool $ajax): bool { return true; }
+	}
 	final class DummyAuth implements \Base3\Accesscontrol\Api\IAccesscontrol {
 		public function authenticate(): void {}
 	}
@@ -136,10 +156,16 @@ namespace {
 
 	final class DummyUsermanager implements IUsermanager {
 		public function __construct(private bool $admin, private ?object $user) {}
-		public function can(Permission $permission): bool {
-			return $this->admin && $permission->scope === 'system' && $permission->permission === 'admin';
-		}
+		public function getGroups(): array { return []; }
 		public function getUser(): ?object { return $this->user; }
+	}
+
+	final class DummyAuthorization implements \Base3\Authorization\Api\IAuthorizationService {
+		public function __construct(private bool $allowed) {}
+		public function getDefaultAuthority(): string { return 'wordpress'; }
+		public function decide(\Base3\Authorization\Dto\AuthorizationRequest $request): \Base3\Authorization\Dto\AuthorizationDecision {
+			return new \Base3\Authorization\Dto\AuthorizationDecision($this->allowed && $request->permission->scope === 'system');
+		}
 	}
 
 	final class DummyTranslation implements ITranslation {
@@ -158,10 +184,11 @@ namespace {
 	final class DummySettings implements IBase3WordPressSettings {
 		public function __construct(private array $data) {}
 		public function getAdministrationConfig(): array { return $this->data; }
+		public function getAdministrationAccessLevel(string $name): ?string { return null; }
 	}
 
 	$links = new DummyLinks();
-	$lab = new Base3WordPressLabSettings(new DummyTranslation(), $links);
+	$lab = new Base3WordPressLabSettings(new DummyTranslation(), $links, new DummyUsermanager(false, null));
 	$tabs = $lab->getAdministrationConfig();
 	$displayData = null;
 	foreach ($tabs as $tab) {
@@ -187,28 +214,28 @@ namespace {
 	$settings = new DummySettings($tabs);
 	$GLOBALS['nonce_valid'] = true;
 	$GLOBALS['nonce_checks'] = [];
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(false, (object) ['id' => 1]), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(false, (object) ['id' => 1]), new DummyAuthorization(false), $settings, $service);
 	http_response_code(200);
 	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'non-administrator is denied');
 	verify($GLOBALS['nonce_checks'] === [], 'permission is checked before nonce');
 
 	$GLOBALS['nonce_valid'] = false;
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 1]), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 1]), new DummyAuthorization(true), $settings, $service);
 	http_response_code(200);
 	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'invalid nonce is denied');
 	verify(count($GLOBALS['nonce_checks']) === 1 && $GLOBALS['nonce_checks'][0] === ['base3_admin_display', '_wpnonce', false], 'same WordPress nonce contract');
 
 	$GLOBALS['nonce_valid'] = true;
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, null), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, null), new DummyAuthorization(true), $settings, $service);
 	http_response_code(200);
 	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'missing user identity is denied');
 
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummySettings([]), $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), new DummySettings([]), $service);
 	$invalidOwner = false;
 	try { $output->getOutput('json', true); } catch (\RuntimeException $error) { $invalidOwner = $error->getMessage() === 'Chatbot administration storage owner is not configured.'; }
 	verify($invalidOwner, 'missing configured storage owner is rejected');
 
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), $settings, $service);
 	$called = false;
 	try { $output->getOutput('json', true); } catch (\RuntimeException $error) { $called = $error->getMessage() === 'FileManager handler invoked'; }
 	verify($called, 'authorized request reaches existing HTTP service');

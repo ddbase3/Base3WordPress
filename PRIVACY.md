@@ -36,12 +36,22 @@ memberships require code/deployment edits. Historical records may remain in
 independent backups, logs or database copies. Source inspection does not establish
 a retention policy, backup deletion frequency, or host access restrictions.
 
-The Groups/Features form requires both native `manage_options` and the BASE3
-`development` group, with a WordPress AJAX admin nonce plus a separate form
-nonce for write operations. The generic AJAX bridge also checks native
-administrator/advanced developer access for discovered admin tab displays;
+The existing `WordPressAudienceAdministrationService` exposes the host-owned
+datasets to the unchanged `ClientStack` Groups/Features displays. No parallel
+policy store, separate WordPress user table or new external recipient is added.
+`base3wordpress/groups` may also store one `defaultGroup` name. When configured,
+this names an editable, nonprivileged group for authenticated users with no
+other effective group beyond the built-in `authenticated` group. It cannot be
+used to grant `development` or `administration` automatically.
+
+Read and write operations require both native `manage_options` and the BASE3
+`development` group. The generic WordPress AJAX bridge additionally checks its
+`base3_admin_display` nonce; the shared ClientStack forms independently use
+BASE3 session CSRF tokens bound to the validated WordPress login. User/role
+identifiers and configured criteria are submitted to the same-site host;
 public `chatbotdisplay` and game outputs are not converted into admin-only
-endpoints. Authorization and nonce checks generate requests to the same
+endpoints. WordPress role slugs are edited via the shared schema-backed
+`wordpressrolecriterion`, without creating native roles or grants. Authorization and nonce checks generate requests to the same
 WordPress host; no new external recipient is introduced by this code.
 
 An exact developer login/email allowlist is configured in the host's

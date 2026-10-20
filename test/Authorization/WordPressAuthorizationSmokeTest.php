@@ -11,6 +11,8 @@ spl_autoload_register(static function(string $class): void {
 		'Base3\\' => $root . '/Base3Framework/src/',
 		'Base3WordPress\\' => $root . '/Base3WordPress/src/',
 		'Base3WordPressLab\\' => $root . '/Base3WordPressLab/src/',
+		'ClientStack\\' => $root . '/ClientStack/src/',
+		'UiFoundation\\' => $root . '/UiFoundation/src/',
 		'PulseCore\\' => $root . '/PulseCore/src/'
 	];
 	foreach ($prefixes as $prefix => $base) {
@@ -205,6 +207,17 @@ final class AudienceTestTranslation implements \Base3\Translation\Api\ITranslati
 final class AudienceTestLinks implements \Base3\LinkTarget\Api\ILinkTargetService {
 	public function getLink(array $target, array $params = []): string { return 'admin-ajax.php?' . http_build_query(array_merge(['name'=>$target['name'],'out'=>$target['out']], $params)); }
 }
+final class AudienceTestSession implements \Base3\Session\Api\ISession {
+	private array $data = [];
+	public function started(): bool { return true; }
+	public function getId(): string { return 'test-session'; }
+	public function start(): bool { return true; }
+	public function destroy(): bool { $this->data = []; return true; }
+	public function get(string $key, mixed $default = null): mixed { return $this->data[$key] ?? $default; }
+	public function set(string $key, mixed $value): void { $this->data[$key] = $value; }
+	public function has(string $key): bool { return array_key_exists($key, $this->data); }
+	public function remove(string $key): void { unset($this->data[$key]); }
+}
 final class AudienceTestView implements \Base3\Api\IMvcView {
 	private array $_ = [];
 	private string $path = '';
@@ -226,37 +239,88 @@ $GLOBALS['who'] = 4;
 $reduced = $settings->getAdministrationConfig();
 verify(in_array('base3', array_column($reduced, 'name'), true), 'Non-development WordPress administrator retains reduced BASE3 tools');
 verify(!in_array('provider', array_column($reduced, 'name'), true), 'Provider tab removed from ordinary admin navigation');
-verify($settings->getAdministrationAccessLevel('base3wordpressaudienceadmindisplay') === 'development', 'Direct audience AJAX requests classified as developer-only');
+verify($settings->getAdministrationAccessLevel('authorizationgroupsdisplay') === 'development', 'Direct shared Groups AJAX requires development group');
+verify($settings->getAdministrationAccessLevel('authorizationfeaturesdisplay') === 'development', 'Direct shared Features AJAX requires development group');
 verify($settings->getAdministrationAccessLevel('tabcontroldisplay') === 'development', 'Generic nested tab composition is developer-only, not public AJAX');
 verify($settings->getAdministrationAccessLevel('pulsecoredisplay') === null, 'Games remain independently feature-authorized and embeddable');
+$audiences = new \Base3WordPress\Authorization\WordPressAudienceAdministrationService($service, $manager, $groups, $features, $editor);
+$denied = false;
+try { $audiences->getGroupView(); } catch (\RuntimeException) { $denied = true; }
+verify($denied, 'Native site administrator without development cannot read group audiences');
+$GLOBALS['who'] = 2;
+$denied = false;
+try { $audiences->getFeatureView(); } catch (\RuntimeException) { $denied = true; }
+verify($denied, 'Native non-administrator cannot read feature audiences');
 $GLOBALS['who'] = 1;
 $full = $settings->getAdministrationConfig();
 verify(in_array('provider', array_column($full, 'name'), true), 'Code-owned developer receives full navigation');
 $base3 = $full[array_search('base3', array_column($full, 'name'), true)];
-verify(in_array('base3wordpressgroups', array_column($base3['displays'], 'name'), true)
-	&& in_array('base3wordpressfeatures', array_column($base3['displays'], 'name'), true), 'Groups and Features appear in full BASE3 navigation');
-$_GET = ['base3_mode'=>'features'];
+verify(in_array('authorizationgroupsdisplay', array_column($base3['displays'], 'name'), true)
+	&& in_array('authorizationfeaturesdisplay', array_column($base3['displays'], 'name'), true), 'Shared ClientStack Groups/Features appear in full BASE3 navigation');
+verify(!in_array('base3wordpressaudienceadmindisplay', array_column($base3['displays'], 'name'), true), 'Legacy WordPress audience display not present in navigation');
+$groupView = $audiences->getGroupView();
+$featureView = $audiences->getFeatureView();
+verify(isset($groupView['criterionOptions'][0]['name']) && isset($featureView['rows'][0]['rules']), 'Shared UI receives exact group and feature data contracts');
+$role = ['criterion'=>'wordpressrolecriterion', 'config'=>['roles'=>['editor']]];
+$described = $editor->describe($role);
+verify($described[0]['kind'] === 'criterion' && $editor->parse($described, null) === ['any'=>[$role]], 'WordPress role slugs round-trip through shared schema-backed criterion selector');
+$session = new AudienceTestSession();
+$_GET = [];
 $_POST = [];
-$display = new \Base3WordPress\Display\Base3WordPressAudienceAdminDisplay(
-	$service, $manager, \Base3\Core\Request::fromGlobals(), new AudienceTestView(), new AudienceTestLinks(), $groups, $features, $editor
+$display = new \ClientStack\Display\AuthorizationGroupsDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
 );
-$display->setData(['mode'=>'features']);
 $html = $display->getOutput('html', true);
-verify(str_contains($html, 'BASE3 features') && str_contains($html, 'WordPress role') && str_contains($html, 'pulsecoreplayfeature'), 'Shared editor renders discovered feature and native role selectors');
-$_GET = ['base3_mode'=>'groups'];
-$_POST = ['base3_audience_action'=>'create', 'base3_audience_nonce'=>'test-nonce', 'base3_group_name'=>'webteam', 'base3_group_description'=>'Website team'];
-$display = new \Base3WordPress\Display\Base3WordPressAudienceAdminDisplay(
-	$service, $manager, \Base3\Core\Request::fromGlobals(), new AudienceTestView(), new AudienceTestLinks(), $groups, $features, $editor
+verify(str_contains($html, 'data-base3-display="authorizationgroupsdisplay"') && str_contains($html, 'reviewers'), 'Shared ClientStack Groups template renders existing WordPress groups');
+$_POST = ['base3_group_action'=>'create', 'base3_group_csrf'=>$session->get('authorization.groups.csrf'), 'base3_group_name'=>'webteam', 'base3_group_description'=>'Website team'];
+$display = new \ClientStack\Display\AuthorizationGroupsDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
 );
-verify(str_contains($display->getOutput('html', true), 'BASE3 group created.'), 'WordPress nonce-protected group create uses existing settings store');
+$createdHtml = $display->getOutput('html', true);
+verify(str_contains($createdHtml, 'BASE3 group created.') && str_contains($createdHtml, 'webteam'), 'Shared CSRF-protected Groups display creates WordPress-managed group');
+$audiences->replaceGroupRules(['webteam'=>[['kind'=>'criterion', 'value'=>'wordpressrolecriterion','config'=>'{"roles":["subscriber"]}']]], 'webteam');
+verify($groups->getDefaultGroup() === 'webteam', 'Default group is stored with membership rules');
+$GLOBALS['who'] = 3;
+verify(in_array('webteam', $names(), true), 'Native subscriber group criterion applies through same WordPress usermanager');
+$GLOBALS['who'] = 2;
+verify(in_array('webteam', $names(), true), 'Authenticated WordPress user without another explicit group receives nonprivileged fallback');
+$GLOBALS['who'] = 1;
+$audiences->replaceGroupRules(['webteam'=>[['kind'=>'criterion','value'=>'wordpressrolecriterion','config'=>'{"roles":["subscriber"]}']]], '');
+$GLOBALS['who'] = 2;
+verify(!in_array('webteam', $names(), true), 'Unmatched WordPress roles do not join custom group when fallback is disabled');
+$GLOBALS['who'] = 1;
+$audiences->replaceGroupRules(['webteam'=>[['kind'=>'criterion','value'=>'wordpressrolecriterion','config'=>'{"roles":["subscriber"]}']]], 'webteam');
+$GLOBALS['who'] = 1;
+$disallowed = false;
+try { $audiences->replaceGroupRules([], 'development'); } catch (InvalidArgumentException) { $disallowed = true; }
+verify($disallowed, 'Privileged development group cannot be configured as fallback');
+$disallowed = false;
+try { $audiences->removeGroup('webteam'); } catch (InvalidArgumentException) { $disallowed = true; }
+verify($disallowed, 'Managed fallback group cannot be removed while referenced');
+$_POST = [];
+$featureDisplay = new \ClientStack\Display\AuthorizationFeaturesDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+);
+$featureHtml = $featureDisplay->getOutput('html', true);
+verify(str_contains($featureHtml, 'data-base3-display="authorizationfeaturesdisplay"') && str_contains($featureHtml, 'pulsecoreplayfeature'), 'Shared ClientStack Features template renders WordPress features');
+$_POST = ['base3_feature_action'=>'save', 'base3_feature_csrf'=>$session->get('authorization.features.csrf'),
+	'base3_feature_rules'=>['pulsecoreplayfeature'=>[['kind'=>'criterion', 'value'=>'wordpressrolecriterion', 'config'=>'{"roles":["editor"]}']]]];
+$featureDisplay = new \ClientStack\Display\AuthorizationFeaturesDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+);
+verify(str_contains($featureDisplay->getOutput('html', true), 'Feature audiences saved.'), 'Shared CSRF-protected Features display saves WordPress feature audience');
+$GLOBALS['who'] = 2;
+verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Updated shared feature audience matches WordPress native role');
+$GLOBALS['who'] = 1;
+verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Updated shared feature audience excludes other roles');
 $GLOBALS['who'] = 4;
 $_POST = [];
-$display = new \Base3WordPress\Display\Base3WordPressAudienceAdminDisplay(
-	$service, $manager, \Base3\Core\Request::fromGlobals(), new AudienceTestView(), new AudienceTestLinks(), $groups, $features, $editor
-);
 http_response_code(200);
-verify(str_contains($display->getOutput('html', true), 'access denied') && http_response_code() === 403,
-	'Native site administrator without BASE3 development cannot open direct group configuration');
+$display = new \ClientStack\Display\AuthorizationGroupsDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+);
+verify(str_contains($display->getOutput('html', true), 'unavailable') && http_response_code() === 403,
+	'Native site administrator without BASE3 development cannot open direct shared group editor');
 echo 'WordPress project navigation and display tests OK' . PHP_EOL;
 
 ob_end_flush();

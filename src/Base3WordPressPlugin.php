@@ -23,9 +23,11 @@ use Base3\Usermanager\Api\IUsermanager;
 use Base3\Usermanager\UserCriterionEvaluator;
 use Base3\Authorization\Api\IAuthorizationService;
 use Base3\Authorization\Api\IAuthorizationAdministrationService;
+use UiFoundation\Api\IAuthorizationAudienceAdministrationService;
 use Base3\Settings\Api\ISettingsStore;
 use Base3WordPress\Authorization\WordPressAuthorizationService;
 use Base3WordPress\Authorization\WordPressAuthorizationAdministrationService;
+use Base3WordPress\Authorization\WordPressAudienceAdministrationService;
 use Base3WordPress\Service\WordPressFeatureConfiguration;
 use Base3WordPress\Service\WordPressGroupConfiguration;
 use Base3WordPress\Service\WordPressAudienceEditor;
@@ -82,6 +84,11 @@ final class Base3WordPressPlugin implements IPlugin, IBase {
 				$c->get(IUsermanager::class), $c->get(WordPressFeatureConfiguration::class), $c->get(UserCriterionEvaluator::class)
 			), IContainer::SHARED)
 			->set(IAuthorizationAdministrationService::class, fn() => new WordPressAuthorizationAdministrationService(), IContainer::SHARED)
+			->set(IAuthorizationAudienceAdministrationService::class, fn($c) => new WordPressAudienceAdministrationService(
+				$c->get(IAuthorizationService::class), $c->get(IUsermanager::class),
+				$c->get(WordPressGroupConfiguration::class), $c->get(WordPressFeatureConfiguration::class),
+				$c->get(WordPressAudienceEditor::class)
+			), IContainer::SHARED)
 			->set('usermanager', IUsermanager::class, IContainer::ALIAS)
 			->set(ILanguage::class, fn() => new WordPressLanguage(), IContainer::SHARED)
 			->set(ITranslation::class, fn($c) => new WordPressTranslation($c->get(ILanguage::class), $c->get(IModuleRegistry::class)), IContainer::SHARED)

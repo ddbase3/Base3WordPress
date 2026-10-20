@@ -45,7 +45,11 @@ may also create ordinary `Group` DTOs from Groups, with unique technical names.
 There is no parallel dynamic PHP class registry. Group definitions and editable
 rules are stored together in `ISettingsStore` as `base3wordpress/groups`.
 Custom groups can be removed only if no effective feature audience references
-them.
+or configured fallback reference them. The optional `defaultGroup` is stored in
+the same `base3wordpress/groups` dataset and applies only to authenticated
+users who have no other matched group beyond `authenticated`. It must name a
+current editable, nonprivileged group. `development` and `administration`
+cannot be selected as a fallback.
 
 ## Initial developer: prevent lockout
 
@@ -87,29 +91,47 @@ schema-backed criteria, including email-domain matching. Advanced `any`, `all`,
 `not` expressions can be edited as JSON without losing existing conditions.
 Native WP permissions are not implicitly granted by feature audiences.
 
-`Base3WordPressAudienceAdminDisplay` is shared by the Groups and Features tabs.
-It uses the WordPress administration nonce `base3_audience_admin` for writes.
-The existing `base3_dispatch` transport remains shared by public and protected
-outputs. The WordPress bridge classifies administrative display names via the
-unfiltered project tab catalog and checks `manage_options`, optional
-`development` and a valid `base3_admin_display` nonce before instantiation.
-The public chatbot output and games are not marked as admin-only; their owner
-services enforce their own runtime permissions. Protected admin displays, including the general-purpose nested TabControlDisplay,
-are not rendered through public post shortcodes or Gutenberg blocks.
+WordPress registers `IAuthorizationAudienceAdministrationService` as
+`WordPressAudienceAdministrationService`. It adapts the existing
+`WordPressGroupConfiguration`, `WordPressFeatureConfiguration` and
+`WordPressAudienceEditor` to the unchanged shared `ClientStack` displays
+`authorizationgroupsdisplay` and `authorizationfeaturesdisplay`. The original
+WordPress-only display, templates and assets are retired. Native WordPress role
+grants remain read-only in `AuthorizationAdministrationDisplay`.
 
-The shared audience UI has labelled form fields, keyboard-operable add/remove
-buttons, native select controls, an AJAX error/status region and advanced JSON
-rules. Simple criterion schemas automatically render individual typed property
-fields. Unsupported or nested schemas retain an explicit JSON configuration field;
-validation still occurs in the shared criterion evaluator before persistence. The UI must be tested with keyboard and screen reader combinations in
-the deployed WordPress theme; the tests shipped with the plugin do not establish
-production WCAG conformance.
+The existing `base3_dispatch` transport remains shared by public and protected
+outputs. The WordPress bridge classifies admin displays by the project-owned
+catalog and checks `manage_options`, `development` for Groups/Features, and a
+valid `base3_admin_display` WordPress AJAX nonce before dispatch. The common
+displays also check `system/admin` and call the WordPress adapter for the
+`development` requirement. Each submitted Groups/Features form additionally
+uses its own BASE3 session CSRF token. The WordPress session is bound to the
+trusted current WordPress login token. Neither visibility nor nonce implies a
+permission grant.
+
+WordPress roles have **string slugs**, while the current shared native-role input
+uses a numeric role ID. To avoid a WordPress-only UI or modifying ClientStack,
+configure WordPress roles through the existing common `Criterion` selector
+`wordpressrolecriterion` (schema property `roles`, e.g.
+`{"roles":["editor"]}`). Previously stored role criteria remain readable and
+editable there. Native user IDs and complex group/feature expressions continue
+to use the same `UserCriterionEvaluator` and its advertised schemas. The generic
+numeric `Role` input is not used for WordPress role slugs; a direct native-role
+selector would require an explicitly agreed improvement to the common UI.
+
+The shared audience UI provides labelled controls, keyboard-operable row
+management, a status/error region and advanced JSON rules. Deployed WordPress
+themes and screen readers still require accessibility verification; source tests
+do not prove production WCAG conformance. Public chatbot/game outputs retain
+their independently enforced permissions. The generic TabControlDisplay remains
+restricted in AJAX to the developer classification.
 
 ## Data lifecycle and installation
 
-The existing WordPress database-backed `ISettingsStore` is the owner of the two
-new settings datasets. **No new table or versioned data migration is needed**
-for an installation that had no previous WordPress BASE3 group/feature rules.
+The existing WordPress database-backed `ISettingsStore` remains the owner of
+the same two settings datasets. **No table or versioned data migration is needed**
+for the UI replacement; existing editable groups, feature overrides and the
+configured developer allowlist are preserved.
 Changes to group criteria are saved in one settings write per administration
 operation; feature rules are saved in one settings write. These may contain
 user IDs, WordPress role slugs, exact identity details, email domains and other

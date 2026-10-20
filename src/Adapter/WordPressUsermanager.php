@@ -28,11 +28,21 @@ final class WordPressUsermanager implements IUsermanager {
 	public function getGroups() {
 		$user = $this->getUser();
 		$groups = [];
-		foreach ($this->groupConfiguration->getEntries() as $entry) {
+		$entries = $this->groupConfiguration->getEntries();
+		foreach ($entries as $entry) {
 			try {
 				if ($this->evaluator->matches($user, $entry['criteria'])) $groups[] = $entry['group'];
 			} catch (\InvalidArgumentException) {
 				// Invalid persisted criteria must never grant additional memberships.
+			}
+		}
+		if ($user !== null && !array_filter($groups, static fn($group): bool => (string)$group->name !== 'authenticated')) {
+			$fallback = $this->groupConfiguration->getDefaultGroup();
+			foreach ($entries as $entry) {
+				if ($fallback !== '' && (string)$entry['group']->name === $fallback) {
+					$groups[] = $entry['group'];
+					break;
+				}
 			}
 		}
 		return $groups;

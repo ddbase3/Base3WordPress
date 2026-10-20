@@ -103,10 +103,6 @@ final class WordPressAudienceEditor {
 					$rows[] = ['kind'=>'user', 'value'=>(string)$config['user_ids'][0], 'config'=>'{}'];
 					continue;
 				}
-				if ($name === 'wordpressrolecriterion' && count($config['roles'] ?? []) === 1) {
-					$rows[] = ['kind'=>'role', 'value'=>(string)$config['roles'][0], 'config'=>'{}'];
-					continue;
-				}
 				$rows[] = ['kind'=>'criterion', 'value'=>$name, 'config'=>json_encode($config === [] ? (object)[] : $config, JSON_THROW_ON_ERROR)];
 				continue;
 			}

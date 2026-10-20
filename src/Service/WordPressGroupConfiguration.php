@@ -68,13 +68,20 @@ final class WordPressGroupConfiguration {
 	 * @param array<string,array<string,mixed>> $rules Complete editable group expressions
 	 * @throws InvalidArgumentException On locked/unknown groups or invalid criteria
 	 */
-	public function replaceAll(array $rules): void {
+	public function replaceAll(array $rules, ?string $defaultGroup = null): void {
 		$data = $this->read();
 		$entries = [];
 		foreach ($this->getEntries() as $entry) $entries[(string)$entry['group']->name] = $entry;
 		foreach ($rules as $name => $rule) {
 			if (!isset($entries[$name]) || !$entries[$name]['editable'] || !is_array($rule)) throw new InvalidArgumentException('Unknown or locked group.');
 			$this->evaluator->validate($rule);
+		}
+		if ($defaultGroup !== null) {
+			if ($defaultGroup !== '' && (!isset($entries[$defaultGroup]) || !$entries[$defaultGroup]['editable']
+				|| in_array($defaultGroup, ['administration', 'development', 'anonymous', 'authenticated'], true))) {
+				throw new InvalidArgumentException('Unknown or privileged fallback group.');
+			}
+			$data['defaultGroup'] = $defaultGroup;
 		}
 		foreach ($entries as $name => $entry) {
 			if (!$entry['editable']) continue;
@@ -107,9 +114,28 @@ final class WordPressGroupConfiguration {
 	 */
 	public function remove(string $name): void {
 		$data = $this->read();
-		if (!isset($data['groups'][$name]) || $this->features->referencesGroup($name)) throw new InvalidArgumentException('Group cannot be removed.');
+		if (!isset($data['groups'][$name]) || $this->features->referencesGroup($name) || $this->getDefaultGroup() === $name) throw new InvalidArgumentException('Group cannot be removed.');
 		unset($data['groups'][$name]);
 		$this->persist($data);
+	}
+
+	/**
+	 * Returns the nonprivileged authenticated-user fallback, or an empty string when disabled.
+	 * @return string Name of a current editable, nonprivileged group, or empty string
+	 * @throws InvalidArgumentException On a stale, invalid or privileged stored fallback
+	 * @sideeffects None
+	 */
+	public function getDefaultGroup(): string {
+		$name = $this->read()['defaultGroup'] ?? '';
+		if (!is_string($name)) throw new InvalidArgumentException('Invalid default group.');
+		if ($name === '') return '';
+		if (in_array($name, ['administration', 'development', 'anonymous', 'authenticated'], true)) {
+			throw new InvalidArgumentException('Privileged fallback group.');
+		}
+		foreach ($this->getEntries() as $entry) {
+			if ($entry['editable'] && (string)$entry['group']->name === $name) return $name;
+		}
+		throw new InvalidArgumentException('Unknown fallback group.');
 	}
 
 	/** @return array<string,mixed> Persisted single-site group settings. */

@@ -91,6 +91,19 @@ schema-backed criteria, including email-domain matching. Advanced `any`, `all`,
 `not` expressions can be edited as JSON without losing existing conditions.
 Native WP permissions are not implicitly granted by feature audiences.
 
+The project module `Base3WordPressLab` also declares
+`GlobalChatbotLauncherFeature`, with the permission
+`feature/globalchatbotlauncherfeature` and a public-by-default audience of
+`anonymous` or `authenticated`. Its existing `GlobalChatbot` component checks
+this permission before WordPress footer launcher rendering and at priority 0
+on the existing `base3_dispatch` AJAX hooks when the decoded
+`chatbotdisplay` target is `chatbot/default`. The guard reuses the shared
+`AjaxBridge::decodeDisplayData()` method, which is exposed to its host project
+so the display-data format has a single decoder. Denial terminates the AJAX
+request with HTTP 403 before dispatch. Other BASE3 displays, WordPress blocks
+and shortcodes, and generic chatbot conversation APIs retain their own
+existing checks, not this launcher feature. No new transport route is added.
+
 WordPress registers `IAuthorizationAudienceAdministrationService` as
 `WordPressAudienceAdministrationService`. It adapts the existing
 `WordPressGroupConfiguration`, `WordPressFeatureConfiguration` and

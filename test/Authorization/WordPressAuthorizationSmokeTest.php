@@ -104,7 +104,8 @@ final class AudienceTestClassMap implements \Base3\Api\IClassMap {
 			new \Base3\Usermanager\Criterion\Base3UserIdCriterion(),
 			new \Base3\Usermanager\Criterion\Base3UserIdentityCriterion(),
 			new \Base3\Usermanager\Criterion\Base3EmailDomainCriterion(),
-			new \PulseCore\Feature\PulseCorePlayFeature()
+			new \PulseCore\Feature\PulseCorePlayFeature(),
+			new \Base3WordPressLab\Feature\GlobalChatbotLauncherFeature(new AudienceTestTranslation())
 		];
 	}
 	public function instantiate(string $class) { return new $class(); }
@@ -154,6 +155,7 @@ verify(in_array('development', $names(), true), 'Bootstrap developer matches exa
 verify(in_array('administration', $names(), true), 'Native WordPress manage_options yields administration group');
 verify($service->decide($permission('system','admin'))->isAllowed(), 'WordPress manage_options authorizes BASE3 system/admin');
 verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'PulseCore authenticated default works');
+verify($service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Global launcher default allows authenticated visitors');
 verify($service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',55)))->isAllowed(), 'WordPress edit_post meta-capability uses native resource ID');
 verify(!$service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',99)))->isAllowed(), 'Wrong resource ID denies');
 verify(!$service->decide(new \Base3\Authorization\Dto\AuthorizationRequest('wordpress', \Base3\Usermanager\Permission::for('system','admin'), null, new \Base3\Authorization\Dto\SubjectReference('wordpress','user',2)))->isAllowed(), 'Delegated principal denied');
@@ -198,6 +200,12 @@ verify(!$native->describe('wordpress', $site)->canWrite, 'WordPress native capab
 verify(count($native->getSubjects($site)) === 3 && count($native->getGrants($site)) > 0, 'Native roles and grants come from WordPress');
 $GLOBALS['who'] = 0;
 verify(in_array('anonymous', $names(), true), 'Anonymous visitor retains BASE3 anonymous group');
+verify($service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Global launcher default allows anonymous visitors');
+$features->replaceAll(['globalchatbotlauncherfeature' => []], array_map(static fn($g) => $g->name, $groups->getGroups()));
+verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to anonymous visitors');
+$GLOBALS['who'] = 2;
+verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to authenticated visitors');
+$GLOBALS['who'] = 0;
 verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Unauthenticated visitor denied against non-public feature audience');
 echo 'WordPressAuthorizationSmokeTest OK' . PHP_EOL;
 

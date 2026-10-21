@@ -62,3 +62,32 @@ alone is not an administrator grant. Privileged identities and installed
 criteria should be reviewed by the operator for collection, retention, transfer,
 accessibility and misuse. This describes inspected source behavior only, not a
 claim of GDPR compliance or production accessibility conformance.
+
+## Bounded WordPress user-directory search (2026-10-21)
+
+`WordPressUsermanager::searchUsers()` accepts an administrative free-text search
+term and queries the host's existing `users` and `usermeta` tables. Matching
+fields can include native user ID, login, display name, first name, last name,
+email and locale. The function returns BASE3 `User` identities including email
+and locale; it does not resolve or disclose role/capability grants per result.
+ClientStack is responsible for limiting the public-facing AJAX projection and
+performing explicit BASE3 authorization, native administrative access and CSRF
+checks before it exposes any results.
+
+The WordPress adapter also retains the host's `list_users` visibility restriction
+and, for multisite, filters to users associated with the current site. Search
+terms are parameterized and SQL LIKE metacharacters are escaped as literal
+input. The query is limited to 1..100 matching identities per call with stable
+pagination. Neither the query nor results are deliberately written to plugin
+persistence, caches or application logs. Existing WordPress database storage,
+backup processing, query diagnostics and possible host-level SQL logging remain
+outside this adapter; those operator-controlled processes may retain or expose
+query contents, and their retention must be verified for each deployment.
+
+No new external recipients, independent user data store, schema migration,
+or automated retention/deletion process is introduced. Native WordPress user
+changes and deletion remain owned by the host; existing backend copies and
+backups follow deployment-specific rules. The effective permissions, role
+assignments, lawful basis, security controls, and completeness of deletion
+cannot be established from this repository alone. This is a technical source
+inventory, not an assertion of GDPR compliance.

@@ -165,3 +165,41 @@ node modules/Base3WordPressLab/test/GlobalChatbotDomSmokeTest.js
 After deploying, test full and reduced admin navigation, both BASE3 group/feature
 AJAX forms, native WordPress role capabilities, public chatbot AJAX, game display
 and API, native WordPress meta-cap checks, logout and different user sessions.
+
+## Native WordPress user-directory search
+
+`WordPressUsermanager::searchUsers(string $query, int $limit = 20, int $offset = 0): array`
+implements the framework's bounded, free-text `IUsermanager` search contract.
+It searches WordPress user IDs (exactly for numeric terms), logins, display names,
+email addresses, first names, last names, and combined first/last names.
+WordPress stores first and last names in `usermeta`, rather than the searchable
+`users` table columns exposed by `WP_User_Query::search_columns`. The adapter
+therefore executes one prepared query through the host's `$wpdb` connection,
+using `$wpdb->esc_like()` and native table names. Duplicate usermeta records
+cannot duplicate results. Results are ordered by display name and native ID,
+then paginated by the database, never by filtering `getAllUsers()` in PHP.
+
+An empty query returns no results; result pages have a maximum size of 100.
+Invalid limits or negative offsets throw `InvalidArgumentException`. A SQL
+failure raises `RuntimeException`, rather than silently exposing an unfiltered
+result. Native `list_users` visibility is respected, including the existing
+`getAllUsers()` restriction. In multisite installations, the query additionally
+requires the current site's native `capabilities` usermeta key, matching
+WordPress's normal site-membership filter. Actual multisite host deployments
+remain subject to integration testing.
+
+Each matching `Base3\Usermanager\User` contains the native ID, login, display
+name, email, and language (user-specific `locale`, or the current site default).
+Role and capability metadata are deliberately left unresolved for listing;
+`getUserById()` remains the existing detailed identity lookup. Search results
+must **never** be used as an authorization decision. HTTP callers, including
+ClientStack's audience search endpoint, must independently enforce the active
+`IAuthorizationService`, native host access requirements and CSRF protection
+before returning user information to a browser. The adapter does not create
+new tables, settings groups or caches, and does not log search input itself.
+
+The PHPUnit regression test `test/Adapter/WordPressUsermanagerSearchTest.php`
+checks query parameters, escaping, membership filtering and edge cases without
+executing anything on file inclusion. The host integration should additionally
+be tested on an actual WordPress site with users having separate first/last
+names and non-default locales.

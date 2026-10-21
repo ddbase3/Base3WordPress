@@ -86,6 +86,124 @@ final class WordPressUsermanager implements IUsermanager {
 		return array_values(array_filter(array_map([$this, 'userObject'], get_users())));
 	}
 
+	/**
+	 * Searches the current WordPress user directory using one bounded native SQL query.
+	 *
+	 * WordPress stores first and last names as user metadata, so searching only
+	 * WP_User_Query's user-table columns would miss valid name matches. Results
+	 * contain identity fields only; native roles and capabilities are not expanded.
+	 * The same list_users visibility boundary as getAllUsers() is respected.
+	 *
+	 * @param string $query Literal text matched against login, display/full name,
+	 *                      first name, last name or email; digits also match exact IDs
+	 * @param int $limit Maximum number of results, from 1 through 100
+	 * @param int $offset Number of matching users to skip, zero or greater
+	 * @return User[] Native WordPress identities ordered by display name and ID
+	 * @throws \InvalidArgumentException For pagination outside the supported range
+	 * @throws \RuntimeException If the WordPress database query fails
+	 */
+	public function searchUsers(string $query, int $limit = 20, int $offset = 0): array {
+		if ($limit < 1 || $limit > 100 || $offset < 0) {
+			throw new \InvalidArgumentException('User search requires a limit of 1..100 and a non-negative offset.');
+		}
+
+		$query = trim($query);
+		if ($query === '' || !current_user_can('list_users')) return [];
+
+		global $wpdb;
+		$membershipKey = is_multisite()
+			? $wpdb->get_blog_prefix(get_current_blog_id()) . 'capabilities'
+			: null;
+		$sql = $this->prepareSearchUsersQuery($wpdb, $query, $limit, $offset, $membershipKey);
+		$rows = $wpdb->get_results($sql);
+		if ($wpdb->last_error !== '' || !is_array($rows)) {
+			throw new \RuntimeException('WordPress user directory search failed.');
+		}
+
+		$defaultLocale = get_locale();
+		$users = [];
+		foreach ($rows as $row) {
+			$locale = trim((string)($row->user_locale ?? ''));
+			$users[] = User::fromArray([
+				'id' => (int)$row->ID,
+				'userid' => (string)$row->user_login,
+				'name' => (string)$row->display_name,
+				'email' => (string)$row->user_email,
+				'lang' => strtolower(explode('_', $locale !== '' ? $locale : $defaultLocale)[0]),
+				'role' => '',
+				'roles' => []
+			]);
+		}
+
+		return $users;
+	}
+
+	/**
+	 * Prepares the bounded native query using WordPress's own table names and SQL API.
+	 *
+	 * The joined metadata may contain duplicate keys; DISTINCT prevents duplicates
+	 * from shifting page boundaries. Multisite queries require membership in the
+	 * current site's native capabilities record, as does WP_User_Query.
+	 *
+	 * @param object $database The current WordPress wpdb instance
+	 * @param string $query Non-empty, trimmed literal search text
+	 * @param int $limit Validated page size
+	 * @param int $offset Validated page offset
+	 * @param string|null $membershipKey Native current-site membership metadata key
+	 * @return string Fully prepared SQL with escaped search values
+	 */
+	private function prepareSearchUsersQuery(
+		object $database,
+		string $query,
+		int $limit,
+		int $offset,
+		?string $membershipKey
+	): string {
+		$pattern = '%' . $database->esc_like($query) . '%';
+		$conditions = [
+			'LOWER(u.user_login) LIKE LOWER(%s)',
+			'LOWER(u.display_name) LIKE LOWER(%s)',
+			'LOWER(u.user_email) LIKE LOWER(%s)',
+			'LOWER(first_name.meta_value) LIKE LOWER(%s)',
+			'LOWER(last_name.meta_value) LIKE LOWER(%s)',
+			"LOWER(CONCAT_WS(' ', first_name.meta_value, last_name.meta_value)) LIKE LOWER(%s)"
+		];
+		$values = array_fill(0, count($conditions), $pattern);
+
+		// Avoid numeric overflow and preserve substring searches for long numbers.
+		$numeric = ctype_digit($query)
+			? filter_var(ltrim($query, '0'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+			: false;
+		if ($numeric !== false) {
+			$conditions[] = 'u.ID = %d';
+			$values[] = $numeric;
+		}
+
+		$membershipSql = '';
+		if ($membershipKey !== null) {
+			$membershipSql = " AND EXISTS (SELECT 1 FROM {$database->usermeta} AS member"
+				. ' WHERE member.user_id = u.ID AND member.meta_key = %s)';
+			$values[] = $membershipKey;
+		}
+		$values[] = $limit;
+		$values[] = $offset;
+
+		$sql = "SELECT DISTINCT u.ID, u.user_login, u.display_name, u.user_email,"
+			. " (SELECT lang.meta_value FROM {$database->usermeta} AS lang"
+			. " WHERE lang.user_id = u.ID AND lang.meta_key = 'locale'"
+			. ' ORDER BY lang.umeta_id DESC LIMIT 1) AS user_locale'
+			. " FROM {$database->users} AS u"
+			. " LEFT JOIN {$database->usermeta} AS first_name"
+			. " ON first_name.user_id = u.ID AND first_name.meta_key = 'first_name'"
+			. " LEFT JOIN {$database->usermeta} AS last_name"
+			. " ON last_name.user_id = u.ID AND last_name.meta_key = 'last_name'"
+			. ' WHERE (' . implode(' OR ', $conditions) . ')'
+			. $membershipSql
+			. ' ORDER BY u.display_name, u.ID LIMIT %d OFFSET %d';
+
+		return $database->prepare($sql, ...$values);
+	}
+
 	public function getAllGroups() {
 		return $this->groupConfiguration->getGroups();
 	}

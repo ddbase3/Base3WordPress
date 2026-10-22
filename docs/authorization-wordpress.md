@@ -203,3 +203,32 @@ checks query parameters, escaping, membership filtering and edge cases without
 executing anything on file inclusion. The host integration should additionally
 be tested on an actual WordPress site with users having separate first/last
 names and non-default locales.
+
+## Complete WordPress IUsermanager projection (2026-10-22)
+
+The existing `WordPressUsermanager` now consistently exposes native identity,
+role and permission metadata according to the current framework contract. The
+role ID/name are the exact WordPress role slug; translated WordPress labels are
+metadata only. `Role::$permissions` contains `Permission` objects for enabled
+role capabilities. `getPermissions()` omits the role-slug markers from native
+`allcaps`. `getAllPermissions()` includes native capability definitions with
+false entries and the `system/admin` metadata entry. These are descriptions,
+not an alternative authorization service.
+
+`getAllUsers()` uses WordPress's native user query for identity fields only,
+with its current-blog filter and no per-user role expansion. The detailed
+lookup validates positive numeric IDs without lossy casts. WordPress's own
+`create_users`, `promote_user`, `manage_options` and `editable_roles` controls
+are checked before supported native account and role writes. Per-user role
+changes may persist WordPress user metadata; global role capability changes
+persist through WordPress's role API. Self-role revocation is disallowed by
+this adapter. Neither BASE3 group memberships nor direct resource grants are
+modified by these methods; native group-to-role operations remain unsupported.
+
+`WordPressUsermanagerSmokeTest.php` tests identity and role projection, native
+capability catalog, identity-only directory queries, successful and rejected
+native mutations, and anonymous/unauthorized callers. The existing search test
+continues to cover query escaping and pagination. Neither test claims to prove
+host-specific production role-policy behavior; test with WordPress and the
+installed plugins before deployment. No new BASE3 storage or migration is
+introduced.

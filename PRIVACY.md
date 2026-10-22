@@ -1,7 +1,7 @@
 # Base3WordPress: source-verified data processing
 
 `Base3WordPressFileManagerOutput` authorizes FileManager calls through
-`IUsermanager::can(Permission::for('system', 'admin'))`, a WordPress nonce check,
+`IAuthorizationService::decide()` for `system/admin`, a WordPress nonce check,
 and a nonzero authenticated user identifier. It resolves the owner from the
 configured administrative display, rather than from client-supplied identities.
 
@@ -91,3 +91,25 @@ backups follow deployment-specific rules. The effective permissions, role
 assignments, lawful basis, security controls, and completeness of deletion
 cannot be established from this repository alone. This is a technical source
 inventory, not an assertion of GDPR compliance.
+
+## WordPress usermanager completion (2026-10-22)
+
+The active `WordPressUsermanager` reads current identity fields and assigned
+native role slugs through WordPress core. Detailed identities may contain user
+ID, login, display name, email, language, compatibility role and effective
+native-role capability metadata. Directory enumeration now requests only ID,
+login, display name and email with WordPress's site-bound user query and reads
+locale separately, without resolving every result's roles. Both enumeration
+and search require `list_users` and must be protected at their actual HTTP
+entry points with the required BASE3 authorization.
+
+Native user creation, credential changes, role assignment/removal and role
+capability writes modify WordPress's existing stores only when their native
+capabilities and role filtering permit the action. WordPress owns password
+hashing, invalidation and event notifications. The BASE3 adapter does not
+persist an additional copy of user identities, passwords, capabilities or
+search queries. WordPress user metadata, options, third-party plugins, logs,
+backups and retention/deletion remain deployment-owned and require independent
+verification. Native group-to-role changes are not implemented because
+WordPress core does not provide such a relationship. No new external recipient
+or cross-border transfer follows from the inspected adapter code.

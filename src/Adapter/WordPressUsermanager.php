@@ -9,7 +9,7 @@ use Base3\Usermanager\User;
 use Base3\Usermanager\UserCriterionEvaluator;
 use Base3WordPress\Service\WordPressGroupConfiguration;
 
-/** WordPress users, native roles and capabilities exposed through BASE3 RBAC contracts. */
+/** Exposes native WordPress identity, roles and capability metadata to BASE3. */
 final class WordPressUsermanager implements IUsermanager {
 
 	public function __construct(
@@ -17,73 +17,127 @@ final class WordPressUsermanager implements IUsermanager {
 		private readonly UserCriterionEvaluator $evaluator
 	) {}
 
-	public function getUser() {
+	/** Returns the authenticated WordPress identity with native roles, or null. */
+	public function getUser(): ?User {
 		return $this->userObject(wp_get_current_user());
 	}
 
+	/** Looks up a native positive user ID, never an arbitrary login or cast prefix. */
 	public function getUserById(int|string $id): ?User {
-		return $this->userObject(get_user_by('id', (int) $id));
+		$userId = $this->normalizeUserId($id);
+		return $userId === null ? null : $this->userObject(get_user_by('id', $userId));
 	}
 
-	public function getGroups() {
+	/** Evaluates effective BASE3 groups without altering native WordPress roles. */
+	public function getGroups(): array {
 		$user = $this->getUser();
-		$groups = [];
 		$entries = $this->groupConfiguration->getEntries();
+		$groups = [];
+		$explicitMatch = false;
+
 		foreach ($entries as $entry) {
 			try {
-				if ($this->evaluator->matches($user, $entry['criteria'])) $groups[] = $entry['group'];
+				$matched = $this->evaluator->matches($user, $entry['criteria']);
 			} catch (\InvalidArgumentException) {
-				// Invalid persisted criteria must never grant additional memberships.
+				// Invalid configured criteria cannot grant membership.
+				$matched = false;
 			}
+			if (!$matched) continue;
+			$groups[] = $entry['group'];
+			if ($entry['editable']) $explicitMatch = true;
 		}
-		if ($user !== null && !array_filter($groups, static fn($group): bool => (string)$group->name !== 'authenticated')) {
+
+		if ($user !== null && !$explicitMatch) {
 			$fallback = $this->groupConfiguration->getDefaultGroup();
 			foreach ($entries as $entry) {
-				if ($fallback !== '' && (string)$entry['group']->name === $fallback) {
-					$groups[] = $entry['group'];
-					break;
-				}
+				if (!$entry['editable'] || (string)$entry['group']->name !== $fallback) continue;
+				$groups[] = $entry['group'];
+				break;
 			}
 		}
+
 		return $groups;
 	}
 
-	public function getRoles() {
+	/** Returns the current user's assigned native site roles. */
+	public function getRoles(): array {
 		$current = wp_get_current_user();
 		return $current->exists() ? array_map([$this, 'roleObject'], $current->roles) : [];
 	}
 
-	public function getPermissions() {
+	/** Lists enabled capability metadata, excluding role slugs stored in allcaps. */
+	public function getPermissions(): array {
 		$current = wp_get_current_user();
+		if (!$current->exists()) return [];
+
+		$roles = wp_roles()->roles;
 		$permissions = [];
-		if (!$current->exists()) return $permissions;
-		foreach ($current->allcaps as $cap => $enabled) {
-			if ($enabled) $permissions[] = Permission::for('wordpress', (string) $cap);
+		foreach ($current->allcaps as $capability => $enabled) {
+			if (!$enabled || isset($roles[$capability])) continue;
+			$permissions[(string)$capability] = Permission::for('wordpress', (string)$capability);
 		}
-		if (current_user_can('manage_options')) $permissions[] = Permission::for('system', 'admin');
-		return $permissions;
+		ksort($permissions);
+		if (user_can($current, 'manage_options')) {
+			$permissions['system/admin'] = Permission::for('system', 'admin');
+		}
+		return array_values($permissions);
 	}
 
+	/** Tests membership by WordPress role slug, not by its translated display label. */
 	public function hasRole(Role $role): bool {
-		return in_array((string)($role->name ?? ''), wp_get_current_user()->roles, true);
+		$current = wp_get_current_user();
+		if (!$current->exists()) return false;
+
+		$id = (string)($role->id ?? '');
+		$name = (string)($role->name ?? '');
+		foreach ($current->roles as $assigned) {
+			if ($id !== '' && $assigned === $id) return true;
+			if ($name !== '' && $assigned === $name) return true;
+		}
+		return false;
 	}
 
-	public function registUser($userid, $password, $data = null) {
-		if (!current_user_can('create_users') || !is_string($userid)) return false;
-		$result = wp_create_user($userid, (string) $password, is_array($data) ? (string) ($data['email'] ?? '') : '');
-		return !is_wp_error($result);
+	/** Uses the host's account creation API, subject to its native create_users cap. */
+	public function registUser($userid, $password, $data = null): bool {
+		if (!current_user_can('create_users') || !is_string($userid) || $userid === '') return false;
+		$email = is_array($data) ? (string)($data['email'] ?? '') : '';
+		$result = wp_create_user($userid, (string)$password, $email);
+		return is_int($result) && $result > 0;
 	}
 
-	public function changePassword($oldpassword, $newpassword) {
+	/** Verifies the old password before asking WordPress to replace it. */
+	public function changePassword($oldpassword, $newpassword): bool {
 		$user = wp_get_current_user();
-		if (!$user->exists() || !wp_check_password((string) $oldpassword, $user->user_pass, $user->ID)) return false;
-		wp_set_password((string) $newpassword, $user->ID);
+		if (!$user->exists() || !wp_check_password((string)$oldpassword, $user->user_pass, $user->ID)) return false;
+		wp_set_password((string)$newpassword, $user->ID);
 		return true;
 	}
 
-	public function getAllUsers() {
+	/**
+	 * Enumerates visible site identities without expanding each user's roles.
+	 * Native WP_User_Query applies the current blog membership filter on multisite.
+	 *
+	 * @return User[] Native users with identity fields only, sorted by display name
+	 */
+	public function getAllUsers(): array {
 		if (!current_user_can('list_users')) return [];
-		return array_values(array_filter(array_map([$this, 'userObject'], get_users())));
+
+		$rows = get_users([
+			'fields' => ['ID', 'user_login', 'display_name', 'user_email'],
+			'orderby' => ['display_name' => 'ASC', 'ID' => 'ASC'],
+			'count_total' => false
+		]);
+		$users = [];
+		foreach ($rows as $row) {
+			$users[] = $this->directoryUser(
+				(int)$row->ID,
+				(string)$row->user_login,
+				(string)$row->display_name,
+				(string)$row->user_email,
+				get_user_locale((int)$row->ID)
+			);
+		}
+		return $users;
 	}
 
 	/**
@@ -124,15 +178,13 @@ final class WordPressUsermanager implements IUsermanager {
 		$users = [];
 		foreach ($rows as $row) {
 			$locale = trim((string)($row->user_locale ?? ''));
-			$users[] = User::fromArray([
-				'id' => (int)$row->ID,
-				'userid' => (string)$row->user_login,
-				'name' => (string)$row->display_name,
-				'email' => (string)$row->user_email,
-				'lang' => strtolower(explode('_', $locale !== '' ? $locale : $defaultLocale)[0]),
-				'role' => '',
-				'roles' => []
-			]);
+			$users[] = $this->directoryUser(
+				(int)$row->ID,
+				(string)$row->user_login,
+				(string)$row->display_name,
+				(string)$row->user_email,
+				$locale !== '' ? $locale : $defaultLocale
+			);
 		}
 
 		return $users;
@@ -204,77 +256,145 @@ final class WordPressUsermanager implements IUsermanager {
 		return $database->prepare($sql, ...$values);
 	}
 
-	public function getAllGroups() {
+	/** Lists discovered code-owned and managed BASE3 groups, not WordPress roles. */
+	public function getAllGroups(): array {
 		return $this->groupConfiguration->getGroups();
 	}
 
-	public function getAllRoles() {
+	/** Lists all registered site role definitions, regardless of current membership. */
+	public function getAllRoles(): array {
 		return array_map([$this, 'roleObject'], array_keys(wp_roles()->roles));
 	}
 
-	public function getAllPermissions() {
+	/** Returns the native capability catalog, including explicitly denied capabilities. */
+	public function getAllPermissions(): array {
 		if (!current_user_can('manage_options')) return [];
-		$caps = [];
+
+		$capabilities = [];
 		foreach (wp_roles()->roles as $role) {
-			foreach (($role['capabilities'] ?? []) as $cap => $allowed) {
-				if ($allowed) $caps[$cap] = Permission::for('wordpress', (string) $cap);
+			foreach (($role['capabilities'] ?? []) as $capability => $_) {
+				$capabilities[(string)$capability] = Permission::for('wordpress', (string)$capability);
 			}
 		}
-		return array_values($caps);
+		ksort($capabilities);
+		$permissions = array_values($capabilities);
+		$permissions[] = Permission::for('system', 'admin');
+		return $permissions;
 	}
 
+	/** Adds an editable native site role to a user after WordPress's promote_user check. */
 	public function assignRoleToUser($userid, Role $role): bool {
-		if (!current_user_can('promote_users')) return false;
-		$wpRole = get_role((string) $role->name);
-		$user = get_user_by('id', (int) $userid);
-		if ($wpRole === null || !$user) return false;
-		$user->add_role((string) $role->name);
-		return true;
+		$userId = $this->normalizeUserId($userid);
+		$name = (string)($role->id ?? $role->name ?? '');
+		if ($userId === null || $name === '' || !current_user_can('promote_user', $userId) || !$this->isEditableRole($name)) return false;
+
+		$user = get_user_by('id', $userId);
+		if (!$user instanceof \WP_User || !$user->exists()) return false;
+		if (in_array($name, $user->roles, true)) return true;
+		$user->add_role($name);
+		return in_array($name, $user->roles, true);
 	}
 
+	/** Removes an existing role without allowing self-removal or bypassing native role filters. */
 	public function revokeRoleFromUser($userid, Role $role): bool {
-		if (!current_user_can('promote_users')) return false;
-		$user = get_user_by('id', (int) $userid);
-		if (!$user) return false;
-		$user->remove_role((string) $role->name);
-		return true;
+		$userId = $this->normalizeUserId($userid);
+		$name = (string)($role->id ?? $role->name ?? '');
+		if ($userId === null || $name === '' || $userId === get_current_user_id()
+			|| !current_user_can('promote_user', $userId) || !$this->isEditableRole($name)) return false;
+
+		$user = get_user_by('id', $userId);
+		if (!$user instanceof \WP_User || !$user->exists() || !in_array($name, $user->roles, true)) return false;
+		$user->remove_role($name);
+		return !in_array($name, $user->roles, true);
 	}
 
+	/** WordPress core has no native group-to-role inheritance relationship. */
 	public function assignRoleToGroup($groupid, Role $role): bool { return false; }
+
+	/** WordPress core has no native group-to-role inheritance relationship. */
 	public function revokeRoleFromGroup($groupid, Role $role): bool { return false; }
 
+	/** Adds a site-wide WordPress role capability, not a resource-specific grant. */
 	public function addPermissionToRole(Role $role, Permission $permission): bool {
-		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress') return false;
-		$wpRole = get_role((string) $role->name);
+		$name = (string)($role->id ?? $role->name ?? '');
+		$capability = (string)($permission->permission ?? '');
+		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress'
+			|| $capability === '' || !$this->isEditableRole($name)) return false;
+		$wpRole = get_role($name);
 		if ($wpRole === null) return false;
-		$wpRole->add_cap((string) $permission->permission, true);
-		return true;
+		$wpRole->add_cap($capability, true);
+		return ($wpRole->capabilities[$capability] ?? false) === true;
 	}
 
+	/** Removes a site-wide WordPress role capability using the native role API. */
 	public function removePermissionFromRole(Role $role, Permission $permission): bool {
-		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress') return false;
-		$wpRole = get_role((string) $role->name);
-		if ($wpRole === null) return false;
-		$wpRole->remove_cap((string) $permission->permission);
-		return true;
+		$name = (string)($role->id ?? $role->name ?? '');
+		$capability = (string)($permission->permission ?? '');
+		if (!current_user_can('manage_options') || $permission->scope !== 'wordpress'
+			|| $capability === '' || !$this->isEditableRole($name)) return false;
+		$wpRole = get_role($name);
+		if ($wpRole === null || !array_key_exists($capability, $wpRole->capabilities)) return false;
+		$wpRole->remove_cap($capability);
+		return !array_key_exists($capability, $wpRole->capabilities);
 	}
 
+	/** Projects a detailed trusted host user, including native site roles. */
 	private function userObject(mixed $source): ?User {
 		if (!$source instanceof \WP_User || !$source->exists()) return null;
+		$user = $this->directoryUser(
+			(int)$source->ID,
+			(string)$source->user_login,
+			(string)$source->display_name,
+			(string)$source->user_email,
+			get_user_locale((int)$source->ID)
+		);
+		$user->role = user_can($source, 'manage_options') ? 'admin' : 'member';
+		$user->roles = array_map([$this, 'roleObject'], $source->roles);
+		return $user;
+	}
+
+	/** Converts only native directory fields without expanding user permissions. */
+	private function directoryUser(int $id, string $login, string $name, string $email, string $locale): User {
 		return User::fromArray([
-			'id' => $source->ID,
-			'userid' => $source->user_login,
-			'name' => $source->display_name,
-			'email' => $source->user_email,
-			'lang' => strtolower(explode('_', get_user_locale($source->ID))[0]),
-			'role' => user_can($source, 'manage_options') ? 'admin' : 'member',
-			'roles' => array_map([$this, 'roleObject'], $source->roles)
+			'id' => $id,
+			'userid' => $login,
+			'name' => $name !== '' ? $name : $login,
+			'email' => $email,
+			'lang' => strtolower(explode('_', $locale)[0]),
+			'role' => '',
+			'roles' => []
 		]);
 	}
 
-
+	/** Maps a native role slug and its granted capabilities to BASE3 metadata. */
 	private function roleObject(string $name): Role {
 		$role = get_role($name);
-		return Role::fromArray(['id' => $name, 'name' => $name, 'label' => translate_user_role(wp_roles()->role_names[$name] ?? $name), 'permissions' => array_keys(array_filter($role?->capabilities ?? []))]);
+		$permissions = [];
+		foreach ($role?->capabilities ?? [] as $capability => $enabled) {
+			if ($enabled) $permissions[] = Permission::for('wordpress', (string)$capability);
+		}
+		return Role::fromArray([
+			'id' => $name,
+			'name' => $name,
+			'label' => translate_user_role(wp_roles()->role_names[$name] ?? $name),
+			'permissions' => $permissions
+		]);
+	}
+
+	/** WordPress admin filters define which native role slugs the actor may edit. */
+	private function isEditableRole(string $name): bool {
+		if ($name === '' || get_role($name) === null) return false;
+		$editable = apply_filters('editable_roles', wp_roles()->roles);
+		return is_array($editable) && isset($editable[$name]);
+	}
+
+	/** Rejects malformed, overflowing or cross-host user identifiers before native lookup. */
+	private function normalizeUserId(int|string $id): ?int {
+		if (is_int($id)) return $id > 0 ? $id : null;
+		if ($id === '' || !ctype_digit($id)) return null;
+		$normalized = ltrim($id, '0');
+		if ($normalized === '') return null;
+		$value = filter_var($normalized, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+		return $value === false ? null : $value;
 	}
 }

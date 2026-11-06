@@ -37,8 +37,9 @@ use Base3WordPress\Adapter\WordPressAssetResolver;
 use Base3WordPress\Adapter\WordPressConfiguration;
 use Base3WordPress\Adapter\WordPressDatabase;
 use Base3WordPress\Adapter\WordPressFileStorageFactory;
-use Base3WordPress\Adapter\WordPressFileUploadService;
-use Base3WordPress\Adapter\WordPressFileManagerHttpService;
+use ClientStack\FileManager\FileUploadService;
+use ClientStack\FileManager\FileManagerHttpService;
+use Base3\Api\IRequest;
 use Base3WordPress\Adapter\WordPressLanguage;
 use Base3WordPress\Adapter\WordPressManagedFileStorageService;
 use Base3WordPress\Adapter\WordPressMvcView;
@@ -99,8 +100,15 @@ final class Base3WordPressPlugin implements IPlugin, IBase {
 			->set(IConfigValueResolver::class, fn($c) => new ConfigValueResolver($c->get(IClassMap::class)), IContainer::SHARED | IContainer::NOOVERWRITE)
 			->set(IFileStorageFactory::class, fn() => new WordPressFileStorageFactory(), IContainer::SHARED | IContainer::NOOVERWRITE)
 			->set(IManagedFileStorageService::class, fn($c) => new WordPressManagedFileStorageService($c->get(IFileStorageFactory::class)), IContainer::SHARED | IContainer::NOOVERWRITE)
-			->set(WordPressFileUploadService::class, fn($c) => new WordPressFileUploadService($c->get(IManagedFileStorageService::class)), IContainer::SHARED)
-			->set(WordPressFileManagerHttpService::class, fn($c) => new WordPressFileManagerHttpService($c->get(IManagedFileStorageService::class), $c->get(WordPressFileUploadService::class)), IContainer::SHARED)
+			->set(FileUploadService::class, fn($c) => new FileUploadService(
+				$c->get(IManagedFileStorageService::class), DIR_LOCAL . 'filemanager-upload/'
+			), IContainer::SHARED)
+			->set(FileManagerHttpService::class, fn($c) => new FileManagerHttpService(
+				$c->get(IManagedFileStorageService::class),
+				$c->get(FileUploadService::class),
+				$c->get(IRequest::class),
+				$c->get(ITranslation::class)
+			), IContainer::SHARED)
 			->set('workers', fn($c) => [
 				'Base3WordPress' => fn() => new DelegateWorker($c->get(IClassMap::class), $c->get(IConfiguration::class))
 			], IContainer::SHARED | IContainer::NOOVERWRITE);

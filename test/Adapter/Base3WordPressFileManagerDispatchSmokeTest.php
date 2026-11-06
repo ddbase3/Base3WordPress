@@ -55,7 +55,7 @@ namespace Base3\Authorization\Api {
 
 namespace Base3\Translation\Api {
 	interface ITranslation {
-		public function translate(string $scope, string $domain, string $key, string $fallback): string;
+		public function translate(string $scope, string $domain, string $key, string $fallback = ''): string;
 	}
 }
 
@@ -65,10 +65,26 @@ namespace Base3\LinkTarget\Api {
 	}
 }
 
-namespace Base3WordPress\Api {
-	interface IBase3WordPressSettings {
-		public function getAdministrationConfig(): array;
-		public function getAdministrationAccessLevel(string $name): ?string;
+namespace ResourceFoundation\Api {
+	interface IManagedFileStorageService { public const MODE_COLLECTION = 'collection'; }
+}
+
+namespace ClientStack\FileManager {
+	/** Spy matching the shared HTTP adapter's public protocol. */
+	final class FileManagerHttpService {
+		public const DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024;
+		public static array $calls = [];
+		public static function buildEndpoints(string $baseUrl, string $parameter = 'fm_action'): array {
+			$result = [];
+			foreach (['list','stat','mkdir','delete','rmdir','copy','move','uploadStart','uploadChunk','uploadStatus','uploadFinish','uploadAbort','download'] as $action) {
+				$result[$action] = $baseUrl . (str_contains($baseUrl, '?') ? '&' : '?') . $parameter . '=' . $action;
+			}
+			return $result;
+		}
+		public function handle(string $action, string $group, string $name, string $mode, string $userId, int $maxFileSize): string {
+			self::$calls[] = compact('action', 'group', 'name', 'mode', 'userId', 'maxFileSize');
+			return '{"success":true}';
+		}
 	}
 }
 
@@ -78,13 +94,6 @@ namespace Base3WordPress\Adapter {
 		return ($GLOBALS['nonce_valid'] ?? false) ? 1 : false;
 	}
 
-	final class WordPressFileManagerHttpService {
-		public static array $calls = [];
-		public function handle(string $action, string $group, string $name, int $userId, int $maxFileSize): never {
-			self::$calls[] = compact('action', 'group', 'name', 'userId', 'maxFileSize');
-			throw new \RuntimeException('FileManager handler invoked');
-		}
-	}
 }
 
 namespace Base3WordPressBridge {
@@ -134,12 +143,11 @@ namespace {
 	use Base3\Usermanager\Api\IUsermanager;
 	use Base3\Usermanager\Permission;
 	use Base3WordPress\Adapter\Base3WordPressFileManagerOutput;
-	use Base3WordPress\Adapter\WordPressFileManagerHttpService;
-	use Base3WordPress\Api\IBase3WordPressSettings;
-	use Base3WordPressLab\Service\Base3WordPressLabSettings;
+	use ClientStack\FileManager\FileManagerHttpService;
+	use Base3WordPressLab\Service\WordPressChatbotDisplayConfiguration;
 
 	require_once __DIR__ . '/../../src/Adapter/Base3WordPressFileManagerOutput.php';
-	require_once __DIR__ . '/../../../Base3WordPressLab/src/Service/Base3WordPressLabSettings.php';
+	require_once __DIR__ . '/../../../Base3WordPressLab/src/Service/WordPressChatbotDisplayConfiguration.php';
 	require_once __DIR__ . '/../../../../includes/AjaxBridge.php';
 
 	ob_start();
@@ -169,7 +177,7 @@ namespace {
 	}
 
 	final class DummyTranslation implements ITranslation {
-		public function translate(string $scope, string $domain, string $key, string $fallback): string { return $fallback; }
+		public function translate(string $scope, string $domain, string $key, string $fallback = ''): string { return 'translated:' . $key; }
 	}
 
 	final class DummyLinks implements ILinkTargetService {
@@ -177,25 +185,13 @@ namespace {
 		public function getLink(array $target, array $params = []): string {
 			$this->calls[] = ['target' => $target, 'params' => $params];
 			return 'admin-ajax.php?action=base3_dispatch&name=' . $target['name']
-				. '&out=' . $target['out'] . '&fm_action=' . $params['fm_action'];
+				. '&out=' . $target['out'];
 		}
 	}
 
-	final class DummySettings implements IBase3WordPressSettings {
-		public function __construct(private array $data) {}
-		public function getAdministrationConfig(): array { return $this->data; }
-		public function getAdministrationAccessLevel(string $name): ?string { return null; }
-	}
 
 	$links = new DummyLinks();
-	$lab = new Base3WordPressLabSettings(new DummyTranslation(), $links, new DummyUsermanager(false, null));
-	$tabs = $lab->getAdministrationConfig();
-	$displayData = null;
-	foreach ($tabs as $tab) {
-		foreach (($tab['displays'] ?? []) as $display) {
-			if (($display['name'] ?? '') === 'chatbotconfigdisplay') $displayData = $display['data'] ?? null;
-		}
-	}
+	$displayData = WordPressChatbotDisplayConfiguration::displayData($links, new DummyTranslation());
 	verify(is_array($displayData), 'project settings contain the chatbot display configuration');
 	verify(($displayData['group'] ?? null) === 'chatbot' && ($displayData['name'] ?? null) === 'default', 'storage owner is preserved');
 	$actions = ['list', 'stat', 'mkdir', 'delete', 'rmdir', 'copy', 'move', 'uploadStart', 'uploadChunk', 'uploadStatus', 'uploadFinish', 'uploadAbort', 'download'];
@@ -209,39 +205,38 @@ namespace {
 	}
 	verify(Base3WordPressFileManagerOutput::getName() === strtolower((new \ReflectionClass(Base3WordPressFileManagerOutput::class))->getShortName()), 'BASE3 class-map naming contract');
 
-	$service = new WordPressFileManagerHttpService();
+	$service = new FileManagerHttpService();
 	$request = new DummyRequest(['fm_action' => 'uploadChunk']);
-	$settings = new DummySettings($tabs);
+	$owner = WordPressChatbotDisplayConfiguration::storageOwner();
 	$GLOBALS['nonce_valid'] = true;
 	$GLOBALS['nonce_checks'] = [];
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(false, (object) ['id' => 1]), new DummyAuthorization(false), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(false, (object) ['id' => 1]), new DummyAuthorization(false), new DummyTranslation(), $service, $owner);
 	http_response_code(200);
-	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'non-administrator is denied');
+	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'translated:access_denied'] && http_response_code() === 403, 'non-administrator is denied');
 	verify($GLOBALS['nonce_checks'] === [], 'permission is checked before nonce');
 
 	$GLOBALS['nonce_valid'] = false;
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 1]), new DummyAuthorization(true), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 1]), new DummyAuthorization(true), new DummyTranslation(), $service, $owner);
 	http_response_code(200);
-	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'invalid nonce is denied');
+	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'translated:access_denied'] && http_response_code() === 403, 'invalid nonce is denied');
 	verify(count($GLOBALS['nonce_checks']) === 1 && $GLOBALS['nonce_checks'][0] === ['base3_admin_display', '_wpnonce', false], 'same WordPress nonce contract');
 
 	$GLOBALS['nonce_valid'] = true;
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, null), new DummyAuthorization(true), $settings, $service);
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, null), new DummyAuthorization(true), new DummyTranslation(), $service, $owner);
 	http_response_code(200);
-	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'BASE3 access permission or nonce missing.'] && http_response_code() === 403, 'missing user identity is denied');
+	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'translated:access_denied'] && http_response_code() === 403, 'missing user identity is denied');
 
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), new DummySettings([]), $service);
-	$invalidOwner = false;
-	try { $output->getOutput('json', true); } catch (\RuntimeException $error) { $invalidOwner = $error->getMessage() === 'Chatbot administration storage owner is not configured.'; }
-	verify($invalidOwner, 'missing configured storage owner is rejected');
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), new DummyTranslation(), $service, []);
+	http_response_code(200);
+	verify(json_decode($output->getOutput('json', true), true) === ['message' => 'translated:owner_unavailable']
+		&& http_response_code() === 503, 'missing configured storage owner is rejected');
 
-	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), $settings, $service);
-	$called = false;
-	try { $output->getOutput('json', true); } catch (\RuntimeException $error) { $called = $error->getMessage() === 'FileManager handler invoked'; }
-	verify($called, 'authorized request reaches existing HTTP service');
-	verify(WordPressFileManagerHttpService::$calls === [[
-		'action' => 'uploadChunk', 'group' => 'chatbot', 'name' => 'default', 'userId' => 42, 'maxFileSize' => 50 * 1024 * 1024
-	]], 'handler receives original action, storage owner and user id');
+	$output = new Base3WordPressFileManagerOutput($request, new DummyUsermanager(true, (object) ['id' => 42]), new DummyAuthorization(true), new DummyTranslation(), $service, $owner);
+	http_response_code(200);
+	verify(json_decode($output->getOutput('json', true), true) === ['success' => true], 'authorized request reaches shared ClientStack handler');
+	verify(FileManagerHttpService::$calls === [[
+		'action' => 'uploadChunk', 'group' => 'chatbot', 'name' => 'default', 'mode' => 'collection', 'userId' => '42', 'maxFileSize' => 50 * 1024 * 1024
+	]], 'handler receives original action, storage owner, mode and WordPress user id');
 
 	$map = new \Base3WordPressBridge\DummyMap();
 	\Base3WordPressBridge\Runtime::$container = new \Base3WordPressBridge\TestContainer($map, new \Base3WordPressBridge\DummyAuth());

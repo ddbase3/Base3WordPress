@@ -2,11 +2,12 @@
   "manifestVersion": 1,
   "name": "Base3WordPress",
   "namespace": "Base3WordPress",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Native WordPress integration adapters for the BASE3 runtime.",
   "dependencies": {
     "Base3Framework": ">=4.10.0",
     "ResourceFoundation": ">=4.5.0",
-    "UiFoundation": ">=4.3.0"
+    "UiFoundation": ">=4.3.0",
+    "ClientStack": ">=4.23.0"
   }
 }

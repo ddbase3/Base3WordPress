@@ -2,10 +2,10 @@
 
 `Base3WordPressFileManagerOutput` authorizes FileManager calls through
 `IAuthorizationService::decide()` for `system/admin`, a WordPress nonce check,
-and a nonzero authenticated user identifier. It resolves the owner from the
-configured administrative display, rather than from client-supplied identities.
+and a nonzero authenticated user identifier. It receives the trusted `chatbot/default` owner from the project composition,
+never from client-supplied identities.
 
-`WordPressFileUploadService` associates upload session metadata and temporary
+`ClientStack\FileManager\FileUploadService` associates upload session metadata and temporary
 chunks with that identifier under `DIR_LOCAL/filemanager-upload/`.
 `WordPressManagedFileStorageService` persists resources under
 `DIR_LOCAL/storage/` using a hash of the configured owner. The existing
@@ -45,7 +45,9 @@ other effective group beyond the built-in `authenticated` group. It cannot be
 used to grant `development` or `administration` automatically.
 
 Read and write operations require both native `manage_options` and the BASE3
-`development` group. The generic WordPress AJAX bridge additionally checks its
+`development` group. The project-owned group's fixed membership includes
+native site administrators with `manage_options`, so no extra allowlist is
+needed. The generic WordPress AJAX bridge additionally checks its
 `base3_admin_display` nonce; the shared ClientStack forms independently use
 BASE3 session CSRF tokens bound to the validated WordPress login. User/role
 identifiers and configured criteria are submitted to the same-site host;
@@ -113,3 +115,24 @@ backups and retention/deletion remain deployment-owned and require independent
 verification. Native group-to-role changes are not implemented because
 WordPress core does not provide such a relationship. No new external recipient
 or cross-border transfer follows from the inspected adapter code.
+
+## Shared FileManager without a storage migration
+
+WordPress retains `WordPressFileStorageFactory` and
+`WordPressManagedFileStorageService` and the existing deterministic owner hash.
+Only HTTP dispatch and chunk-upload processing now use the already installed
+ClientStack services through lazy DI factories. The storage metadata vocabulary
+`dir`/`file` matches `IFileStorage` and ClientStack without changing filesystem
+layout or existing file contents. The host still authorizes native administration,
+the same-site WordPress nonce and a trusted current user at each HTTP request.
+There are no new recipients or retention policies; deployment access protection
+and backup deletion are outside this change.
+
+## Canonical group discovery correction (2026-11-06)
+
+WordPress now uses the unchanged framework-owned `anonymous` and
+`authenticated` groups instead of two duplicate WordPress declarations.
+The WordPress-specific `administration` and project-owned `development`
+membership rules remain unchanged. No stored membership records are migrated,
+no new personal data is collected, and existing `ISettingsStore` records and
+retention behaviors remain the same. The existing private file storage is untouched.

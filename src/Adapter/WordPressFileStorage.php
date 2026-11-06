@@ -20,7 +20,7 @@ final class WordPressFileStorage implements IFileStorage {
 		$result = [];
 		foreach (new \DirectoryIterator($directory) as $item) {
 			if ($item->isDot() || $item->isLink()) continue;
-			$result[] = ['name' => $item->getFilename(), 'type' => $item->isDir() ? 'directory' : 'file', 'size' => $item->isFile() ? $item->getSize() : 0, 'modified' => $item->getMTime()];
+			$result[] = ['name' => $item->getFilename(), 'type' => $item->isDir() ? 'dir' : 'file', 'size' => $item->isFile() ? $item->getSize() : 0, 'modified' => $item->getMTime()];
 		}
 		return $result;
 	}
@@ -77,7 +77,7 @@ final class WordPressFileStorage implements IFileStorage {
 	public function stat(string $path): ?array {
 		$file = $this->target($path);
 		if (!file_exists($file)) return null;
-		return ['name' => basename($file), 'type' => is_dir($file) ? 'directory' : 'file', 'size' => is_file($file) ? filesize($file) : 0, 'modified' => filemtime($file)];
+		return ['name' => basename($file), 'type' => is_dir($file) ? 'dir' : 'file', 'size' => is_file($file) ? filesize($file) : 0, 'modified' => filemtime($file)];
 	}
 
 	private function target(string $relative): string {

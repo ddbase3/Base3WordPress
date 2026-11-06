@@ -27,7 +27,12 @@ a resource-specific authorization decision. Call `IAuthorizationService` for
 all actual access checks.
 
 `getGroups()` evaluates code-owned and editable BASE3 groups through the shared
-`UserCriterionEvaluator`. Only valid explicit editable membership prevents the
+`UserCriterionEvaluator`. The built-in `authenticated` and `anonymous` groups
+are owned only by `Base3Framework`; WordPress contributes `administration`
+without redefining either built-in group. The project-owned `development` group's fixed criteria
+include WordPress's native `manage_options` check, allowing site administrators
+to reach the feature editor without an extra identity allowlist. Only valid
+explicit editable membership prevents the
 configured nonprivileged default-group assignment. A fallback can never grant
 `administration` or `development`. `getAllGroups()` exposes the same code-owned
 and managed BASE3 group catalog. BASE3 groups do not modify WordPress roles.
@@ -92,6 +97,7 @@ php -l modules/Base3WordPress/src/Adapter/WordPressUsermanager.php
 php -l modules/Base3WordPress/test/Adapter/WordPressUsermanagerSmokeTest.php
 php -l modules/Base3WordPress/test/Adapter/WordPressUsermanagerSearchTest.php
 php modules/Base3WordPress/test/Adapter/WordPressUsermanagerSmokeTest.php
+php modules/Base3WordPress/test/Authorization/WordPressGroupDiscoverySmokeTest.php
 ```
 
 The isolated smoke test supplies WordPress fakes and exercises identity,
@@ -105,3 +111,27 @@ vendor/bin/phpunit modules/Base3WordPress/test/Adapter/WordPressUsermanagerSearc
 
 These tests cannot replace an integration run in WordPress, especially for
 multisite role editing, database permissions, filters and user visibility.
+
+## Dynamic WordPress tools and FileManager
+
+The WordPress Tools menu uses canonical ClientStack `settingsdisplay` and the
+`UiFoundation\Api\ISettingsTab` classmap contributions supplied by all
+installed modules. The WordPress bridge checks `system/admin` and a WordPress
+`base3_admin_display` nonce at the HTTP boundary; the owning tab's feature
+audiences still decide visibility. Public game displays remain embeddable.
+
+The host composes the canonical `ClientStack\FileManager\FileUploadService`
+and `FileManagerHttpService` lazily over its existing
+`WordPressManagedFileStorageService`. No FileBridge installation, new database,
+new owner index or storage migration is required. `WordPressFileStorage` now
+reports metadata types `dir` and `file` matching the common protocol. Files and
+chunk-upload directories retain the original `DIR_LOCAL` paths. The project
+binds the trusted `chatbot/default` collection owner; browser-provided owner
+identities are ignored.
+
+Run from the WordPress plugin directory:
+
+```sh
+php modules/Base3WordPress/test/Authorization/WordPressAuthorizationSmokeTest.php
+php modules/Base3WordPress/test/Adapter/Base3WordPressFileManagerDispatchSmokeTest.php
+```

@@ -27,15 +27,16 @@ is rejected instead of simulating atomic capability replacement.
 
 ## Code-owned and custom groups
 
-Three code-discovered `IGroup` definitions in `Base3WordPress` supply:
+The canonical `Base3Framework` `IGroup` definitions own `anonymous` and
+`authenticated`, using their existing authenticated/anonymous criteria. The
+WordPress adapter does not redeclare those logical groups. `Base3WordPress`
+provides only the WordPress-specific `administration` group, matched by the
+native `manage_options` capability; only additional BASE3 membership criteria
+can be edited. This guarantees one discovered owner per group name.
 
-* `anonymous`, matched by `Base3AnonymousCriterion`, locked;
-* `authenticated`, matched by `Base3AuthenticatedCriterion`, locked;
-* `administration`, matched by WordPress's own `manage_options` capability;
-  only additional BASE3 membership criteria can be edited.
-
-The `Base3WordPressLab` **project** plugin owns the `development` group, avoiding
-hardcoding a deployment administrator in reusable WordPress host integration.
+The `Base3WordPressLab` **project** plugin owns the `development` group. Its
+fixed criteria include native WordPress `manage_options` and optional exact
+project developer identities, without moving this policy into the reusable host adapter.
 Group discovery uses the existing `IClassMap`. Group names must be unique.
 
 Editable groups can add user IDs, native WordPress role slugs and any discovered
@@ -51,33 +52,33 @@ users who have no other matched group beyond `authenticated`. It must name a
 current editable, nonprivileged group. `development` and `administration`
 cannot be selected as a fallback.
 
-## Initial developer: prevent lockout
+## Native administrator access and optional developer identities
 
-Before installing the restricted BASE3 configuration UI, add a trusted WordPress
-login to the site's `wp-config.php`, for example:
+Any authenticated site administrator with native WordPress `manage_options`
+automatically satisfies the project-owned `development` group's fixed native
+capability criterion. This gives access to **BASE3 > Werkzeuge > BASE3 >
+Features** and the Groups editor without additional deployment configuration.
+Neither WordPress role labels nor email domains are treated as a grant.
+
+Additional explicit project developers may be configured in `wp-config.php`,
+for example:
 
 ```php
-// Define this before WordPress loads plugins.
+// Optional: exact trusted WordPress logins.
 define('BASE3_WORDPRESS_DEVELOPER_USERNAMES', ['your-actual-wp-login']);
 ```
 
-This is an exact, case-sensitive login list and does not depend on user IDs.
-Alternatively `BASE3_WORDPRESS_DEVELOPER_EMAILS` can hold exact full addresses,
-but only on deployments with properly verified and restricted address changes.
-Both are empty by default and do not grant anybody development membership.
-Never bootstrap all accounts of a domain using an email-domain criterion.
+`BASE3_WORDPRESS_DEVELOPER_EMAILS` may hold complete verified email addresses
+only where the deployment controls address verification and changes. These
+allowlists are empty by default. Site-admin membership and exact identities are
+combined by the existing `UserCriterionEvaluator`; no separate role system is
+introduced. UI changes cannot revoke a fixed native capability or exact
+code-owned identity. Revocation follows WordPress role/capability changes or
+updates to the optional `wp-config.php` allowlists.
 
-The site owner must retain WordPress's native `manage_options` capability as
-well: **developer membership alone does not authorize native administrative
-writes**. More `development` members may be added from Groups through WordPress
-role slugs, user IDs or configured criteria. UI changes cannot remove the
-code-defined bootstrap accounts; revocation requires updating `wp-config.php`.
-Do not expose the installed `wp-config.php` contents or credential-bearing
-backups to unauthorised persons.
-
-All WordPress administrators without `development` see only a reduced BASE3
-admin catalog. Native `manage_options` plus `development` is required for
-Groups/Features write endpoints, not merely for their navigation tabs.
+The `IAuthorizationAudienceAdministrationService` still requires BOTH native
+`system/admin` and `development`. Only `manage_options` permits protected
+Groups/Features writes; additional developer membership does not bypass it.
 
 ## Features and user interface
 
@@ -91,18 +92,13 @@ schema-backed criteria, including email-domain matching. Advanced `any`, `all`,
 `not` expressions can be edited as JSON without losing existing conditions.
 Native WP permissions are not implicitly granted by feature audiences.
 
-The project module `Base3WordPressLab` also declares
-`GlobalChatbotLauncherFeature`, with the permission
-`feature/globalchatbotlauncherfeature` and a public-by-default audience of
-`anonymous` or `authenticated`. Its existing `GlobalChatbot` component checks
-this permission before WordPress footer launcher rendering and at priority 0
-on the existing `base3_dispatch` AJAX hooks when the decoded
-`chatbotdisplay` target is `chatbot/default`. The guard reuses the shared
-`AjaxBridge::decodeDisplayData()` method, which is exposed to its host project
-so the display-data format has a single decoder. Denial terminates the AJAX
-request with HTTP 403 before dispatch. Other BASE3 displays, WordPress blocks
-and shortcodes, and generic chatbot conversation APIs retain their own
-existing checks, not this launcher feature. No new transport route is added.
+The canonical `ClientStack\GlobalChatbotLauncher\GlobalChatbotLauncherFeature`
+declares `feature/globalchatbotlauncherfeature` with the `authenticated` default
+audience. The former duplicate WordPressLab feature declaration is removed.
+`GlobalChatbot` checks the shared feature before footer launcher rendering and
+on the existing `base3_dispatch` AJAX hooks for `chatbot/default`; denial is
+HTTP 403. Other independently embedded chatbots retain their own authority.
+No new transport route or policy storage is added.
 
 WordPress registers `IAuthorizationAudienceAdministrationService` as
 `WordPressAudienceAdministrationService`. It adapts the existing
@@ -113,11 +109,11 @@ WordPress-only display, templates and assets are retired. Native WordPress role
 grants remain read-only in `AuthorizationAdministrationDisplay`.
 
 The existing `base3_dispatch` transport remains shared by public and protected
-outputs. The WordPress bridge classifies admin displays by the project-owned
-catalog and checks `manage_options`, `development` for Groups/Features, and a
+outputs. The WordPress bridge classifies protected displays from classmap-discovered
+`ISettingsTab` entries and checks native `manage_options`, project `development` membership for Groups/Features, and a
 valid `base3_admin_display` WordPress AJAX nonce before dispatch. The common
 displays also check `system/admin` and call the WordPress adapter for the
-`development` requirement. Each submitted Groups/Features form additionally
+`development` requirement, which WordPress administrators meet by native capability. Each submitted Groups/Features form additionally
 uses its own BASE3 session CSRF token. The WordPress session is bound to the
 trusted current WordPress login token. Neither visibility nor nonce implies a
 permission grant.
@@ -162,7 +158,7 @@ php modules/Base3WordPressLab/test/GlobalChatbotSmokeTest.php
 node modules/Base3WordPressLab/test/GlobalChatbotDomSmokeTest.js
 ```
 
-After deploying, test full and reduced admin navigation, both BASE3 group/feature
+After deploying, test native WordPress administrator access without allowlists and non-administrator denial, both BASE3 group/feature
 AJAX forms, native WordPress role capabilities, public chatbot AJAX, game display
 and API, native WordPress meta-cap checks, logout and different user sessions.
 
@@ -232,3 +228,21 @@ continues to cover query escaping and pagination. Neither test claims to prove
 host-specific production role-policy behavior; test with WordPress and the
 installed plugins before deployment. No new BASE3 storage or migration is
 introduced.
+
+## Group discovery regression (2026-11-06)
+
+The canonical framework groups `anonymous` and `authenticated` MUST NOT be
+redefined by the WordPress host. Duplicate group names cause
+`WordPressGroupConfiguration::getEntries()` to throw; the WordPress feature
+service then denies decisions and `SettingsDisplay` shows no entries.
+After unzipping a WordPress patch, run `sh scripts/remove-obsolete-wordpress-integration.sh`
+to remove the two retired WordPress group classes and regenerate the classmap
+through the existing module fingerprint on the next request. Verify with:
+
+```sh
+php modules/Base3WordPress/test/Authorization/WordPressGroupDiscoverySmokeTest.php
+php modules/Base3WordPress/test/Authorization/WordPressAuthorizationSmokeTest.php
+```
+
+The discovery test scans the actual distributed module source rather than a
+reduced mock classmap. No generic BASE3 group definitions or stored rules are changed.

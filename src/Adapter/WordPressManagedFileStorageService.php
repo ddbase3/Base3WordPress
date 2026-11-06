@@ -41,7 +41,7 @@ final class WordPressManagedFileStorageService implements IManagedFileStorageSer
 	private function copyContent(IFileStorage $source, IFileStorage $target, string $prefix = ''): void {
 		foreach ($source->list($prefix) as $item) {
 			$path = ($prefix !== '' ? $prefix . '/' : '') . $item['name'];
-			if ($item['type'] === 'directory') {
+			if ($item['type'] === 'dir') {
 				if (!$target->mkdir($path)) throw new RuntimeException('Cannot create target BASE3 directory.');
 				$this->copyContent($source, $target, $path);
 			} elseif (!$target->write($path, $source->read($path))) {

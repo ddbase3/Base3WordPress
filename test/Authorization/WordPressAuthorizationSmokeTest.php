@@ -23,6 +23,9 @@ spl_autoload_register(static function(string $class): void {
 	}
 });
 
+require_once __DIR__ . '/../Support/WordPressDemoAudienceFeature.php';
+require_once __DIR__ . '/../Support/AudienceTestAssetResolver.php';
+
 class WP_User {
 	public function __construct(
 		public int $ID,
@@ -93,8 +96,8 @@ final class AudienceTestClassMap implements \Base3\Api\IClassMap {
 	private mixed $nothing = null;
 	public function __construct() {
 		$this->instances = [
-			new \Base3WordPress\Group\Base3WordPressAnonymousGroup(),
-			new \Base3WordPress\Group\Base3WordPressAuthenticatedGroup(),
+			new \Base3\Usermanager\Definition\Base3AnonymousGroup(),
+			new \Base3\Usermanager\Definition\Base3AuthenticatedGroup(),
 			new \Base3WordPress\Group\Base3WordPressAdministrationGroup(),
 			new \Base3WordPressLab\Group\Base3WordPressDevelopmentGroup(),
 			new \Base3WordPress\Criterion\WordPressRoleCriterion(),
@@ -104,8 +107,8 @@ final class AudienceTestClassMap implements \Base3\Api\IClassMap {
 			new \Base3\Usermanager\Criterion\Base3UserIdCriterion(),
 			new \Base3\Usermanager\Criterion\Base3UserIdentityCriterion(),
 			new \Base3\Usermanager\Criterion\Base3EmailDomainCriterion(),
-			new \PulseCore\Feature\PulseCorePlayFeature(),
-			new \Base3WordPressLab\Feature\GlobalChatbotLauncherFeature(new AudienceTestTranslation())
+			new \Base3WordPress\Test\Support\WordPressDemoAudienceFeature(),
+			new \ClientStack\GlobalChatbotLauncher\GlobalChatbotLauncherFeature(new AudienceTestTranslation())
 		];
 	}
 	public function instantiate(string $class) { return new $class(); }
@@ -140,75 +143,6 @@ function verify(bool $condition, string $description): void {
 	echo 'PASS ' . $description . PHP_EOL;
 }
 
-$map = new AudienceTestClassMap();
-$store = new InMemorySettingsStore();
-$evaluator = new \Base3\Usermanager\UserCriterionEvaluator($map);
-$features = new \Base3WordPress\Service\WordPressFeatureConfiguration($store, $map, $evaluator);
-$groups = new \Base3WordPress\Service\WordPressGroupConfiguration($store, $map, $evaluator, $features);
-$manager = new \Base3WordPress\Adapter\WordPressUsermanager($groups, $evaluator);
-$service = new \Base3WordPress\Authorization\WordPressAuthorizationService($manager, $features, $evaluator);
-$editor = new \Base3WordPress\Service\WordPressAudienceEditor($map, $evaluator);
-$permission = static fn(string $scope, string $operation, ?\Base3\Authorization\Dto\ResourceReference $resource = null) =>
-	new \Base3\Authorization\Dto\AuthorizationRequest('wordpress', \Base3\Usermanager\Permission::for($scope, $operation), $resource);
-$names = static fn() => array_map(static fn($g) => $g->name, $manager->getGroups());
-verify(in_array('development', $names(), true), 'Bootstrap developer matches exact login');
-verify(in_array('administration', $names(), true), 'Native WordPress manage_options yields administration group');
-verify($service->decide($permission('system','admin'))->isAllowed(), 'WordPress manage_options authorizes BASE3 system/admin');
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'PulseCore authenticated default works');
-verify($service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Global launcher default allows authenticated visitors');
-verify($service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',55)))->isAllowed(), 'WordPress edit_post meta-capability uses native resource ID');
-verify(!$service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',99)))->isAllowed(), 'Wrong resource ID denies');
-verify(!$service->decide(new \Base3\Authorization\Dto\AuthorizationRequest('wordpress', \Base3\Usermanager\Permission::for('system','admin'), null, new \Base3\Authorization\Dto\SubjectReference('wordpress','user',2)))->isAllowed(), 'Delegated principal denied');
-verify(!$service->decide(new \Base3\Authorization\Dto\AuthorizationRequest('other', \Base3\Usermanager\Permission::for('system','admin')))->isAllowed(), 'Unknown authority fails closed');
-$GLOBALS['who'] = 2;
-verify(!in_array('development', $names(), true), 'Ordinary native editor is not an implicit BASE3 developer');
-verify(!$service->decide($permission('system','admin'))->isAllowed(), 'WordPress editor cannot administer system');
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'WordPress editor may play PulseCore by authenticated default');
-$rules = ['pulsecoreplayfeature' => $editor->parse([['kind'=>'role','value'=>'editor']], array_map(static fn($g) => $g->name, $groups->getGroups()))];
-$features->replaceAll($rules, array_map(static fn($g) => $g->name, $groups->getGroups()));
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Native role grants a feature without admin capability');
-$GLOBALS['who'] = 1;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Feature override excludes other roles');
-$features->replaceAll(['pulsecoreplayfeature'=>[]], array_map(static fn($g) => $g->name, $groups->getGroups()));
-$GLOBALS['who'] = 2;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Explicit empty feature override denies');
-$criterionRule = $editor->parse([['kind'=>'criterion','value'=>'base3emaildomaincriterion','config'=>'{"domain":"qualitus.de"}']], array_map(static fn($g) => $g->name, $groups->getGroups()));
-$features->replaceAll(['pulsecoreplayfeature'=>$criterionRule], array_map(static fn($g) => $g->name, $groups->getGroups()));
-$GLOBALS['who'] = 3;
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Discoverable email-domain criterion grants feature without native role');
-$GLOBALS['who'] = 2;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Unmatched email domain does not grant feature');
-$nested = $editor->parse([['kind'=>'expression','config'=>'{"all":[{"group":"authenticated"},{"criterion":"base3emaildomaincriterion","config":{"domain":"qualitus.de"}}]}']], array_map(static fn($g) => $g->name, $groups->getGroups()));
-verify($editor->describe($nested)[0]['kind'] === 'expression', 'Complex AND expression round-trips without flattening');
-$features->replaceAll(['pulsecoreplayfeature'=>$nested], array_map(static fn($g) => $g->name, $groups->getGroups()));
-$GLOBALS['who'] = 3;
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Nested audience AND uses one evaluator');
-$GLOBALS['who'] = 2;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Nested audience requires both conditions');
-
-$groups->create('reviewers','Review team');
-$groups->replaceAll(['reviewers'=>$editor->parse([['kind'=>'role','value'=>'editor']],null)]);
-verify(in_array('reviewers', $names(), true), 'Custom group membership uses the shared native role criterion');
-$features->replaceAll(['pulsecoreplayfeature'=>['group'=>'reviewers']], array_map(static fn($g) => $g->name, $groups->getGroups()));
-$rejected = false;
-try { $groups->remove('reviewers'); } catch (InvalidArgumentException) { $rejected = true; }
-verify($rejected, 'Custom group referenced by feature cannot be removed');
-$GLOBALS['who'] = 1;
-$native = new \Base3WordPress\Authorization\WordPressAuthorizationAdministrationService();
-$site = new \Base3\Authorization\Dto\ResourceReference('wordpress','site','global');
-verify(!$native->describe('wordpress', $site)->canWrite, 'WordPress native capability catalogue explicitly reports read-only');
-verify(count($native->getSubjects($site)) === 3 && count($native->getGrants($site)) > 0, 'Native roles and grants come from WordPress');
-$GLOBALS['who'] = 0;
-verify(in_array('anonymous', $names(), true), 'Anonymous visitor retains BASE3 anonymous group');
-verify($service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Global launcher default allows anonymous visitors');
-$features->replaceAll(['globalchatbotlauncherfeature' => []], array_map(static fn($g) => $g->name, $groups->getGroups()));
-verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to anonymous visitors');
-$GLOBALS['who'] = 2;
-verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to authenticated visitors');
-$GLOBALS['who'] = 0;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Unauthenticated visitor denied against non-public feature audience');
-echo 'WordPressAuthorizationSmokeTest OK' . PHP_EOL;
-
 final class AudienceTestTranslation implements \Base3\Translation\Api\ITranslation {
 	public function translate(string $set, string $section, string $key, string $fallback = '', array $replacements = []): string { return $fallback; }
 }
@@ -241,31 +175,96 @@ final class AudienceTestView implements \Base3\Api\IMvcView {
 	public function loadBricks(string $set, string $language = '') {}
 	public function getBricks(string $set): ?array { return null; }
 }
+
+$map = new AudienceTestClassMap();
+$store = new InMemorySettingsStore();
+$evaluator = new \Base3\Usermanager\UserCriterionEvaluator($map);
+$features = new \Base3WordPress\Service\WordPressFeatureConfiguration($store, $map, $evaluator);
+$groups = new \Base3WordPress\Service\WordPressGroupConfiguration($store, $map, $evaluator, $features);
+$manager = new \Base3WordPress\Adapter\WordPressUsermanager($groups, $evaluator);
+$service = new \Base3WordPress\Authorization\WordPressAuthorizationService($manager, $features, $evaluator);
+$map->instances[] = new \ClientStack\SettingsTab\AuthorizationgroupsSettingsTab(new AudienceTestTranslation(), $service);
+$map->instances[] = new \ClientStack\SettingsTab\AuthorizationfeaturesSettingsTab(new AudienceTestTranslation(), $service);
+$editor = new \Base3WordPress\Service\WordPressAudienceEditor($map, $evaluator);
+$permission = static fn(string $scope, string $operation, ?\Base3\Authorization\Dto\ResourceReference $resource = null) =>
+	new \Base3\Authorization\Dto\AuthorizationRequest('wordpress', \Base3\Usermanager\Permission::for($scope, $operation), $resource);
+$names = static fn() => array_map(static fn($g) => $g->name, $manager->getGroups());
+verify(in_array('development', $names(), true), 'Bootstrap developer matches exact login');
+verify(in_array('administration', $names(), true), 'Native WordPress manage_options yields administration group');
+verify($service->decide($permission('system','admin'))->isAllowed(), 'WordPress manage_options authorizes BASE3 system/admin');
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Demo authenticated default works');
+verify($service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Global launcher default allows authenticated visitors');
+verify($service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',55)))->isAllowed(), 'WordPress edit_post meta-capability uses native resource ID');
+verify(!$service->decide($permission('wordpress','edit_post', new \Base3\Authorization\Dto\ResourceReference('wordpress','post',99)))->isAllowed(), 'Wrong resource ID denies');
+verify(!$service->decide(new \Base3\Authorization\Dto\AuthorizationRequest('wordpress', \Base3\Usermanager\Permission::for('system','admin'), null, new \Base3\Authorization\Dto\SubjectReference('wordpress','user',2)))->isAllowed(), 'Delegated principal denied');
+verify(!$service->decide(new \Base3\Authorization\Dto\AuthorizationRequest('other', \Base3\Usermanager\Permission::for('system','admin')))->isAllowed(), 'Unknown authority fails closed');
+$GLOBALS['who'] = 2;
+verify(!in_array('development', $names(), true), 'Ordinary native editor is not an implicit BASE3 developer');
+verify(!$service->decide($permission('system','admin'))->isAllowed(), 'WordPress editor cannot administer system');
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Editor can use authenticated feature by default');
+$rules = ['wordpressdemoaudiencefeature' => $editor->parse([['kind'=>'role','value'=>'editor']], array_map(static fn($g) => $g->name, $groups->getGroups()))];
+$features->replaceAll($rules, array_map(static fn($g) => $g->name, $groups->getGroups()));
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Native role grants a feature without admin capability');
+$GLOBALS['who'] = 1;
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Feature override excludes other roles');
+$features->replaceAll(['wordpressdemoaudiencefeature'=>[]], array_map(static fn($g) => $g->name, $groups->getGroups()));
+$GLOBALS['who'] = 2;
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Explicit empty feature override denies');
+$criterionRule = $editor->parse([['kind'=>'criterion','value'=>'base3emaildomaincriterion','config'=>'{"domain":"qualitus.de"}']], array_map(static fn($g) => $g->name, $groups->getGroups()));
+$features->replaceAll(['wordpressdemoaudiencefeature'=>$criterionRule], array_map(static fn($g) => $g->name, $groups->getGroups()));
+$GLOBALS['who'] = 3;
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Discoverable email-domain criterion grants feature without native role');
+$GLOBALS['who'] = 2;
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Unmatched email domain does not grant feature');
+$nested = $editor->parse([['kind'=>'expression','config'=>'{"all":[{"group":"authenticated"},{"criterion":"base3emaildomaincriterion","config":{"domain":"qualitus.de"}}]}']], array_map(static fn($g) => $g->name, $groups->getGroups()));
+verify($editor->describe($nested)[0]['kind'] === 'expression', 'Complex AND expression round-trips without flattening');
+$features->replaceAll(['wordpressdemoaudiencefeature'=>$nested], array_map(static fn($g) => $g->name, $groups->getGroups()));
+$GLOBALS['who'] = 3;
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Nested audience AND uses one evaluator');
+$GLOBALS['who'] = 2;
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Nested audience requires both conditions');
+
+$groups->create('reviewers','Review team');
+$groups->replaceAll(['reviewers'=>$editor->parse([['kind'=>'role','value'=>'editor']],null)]);
+verify(in_array('reviewers', $names(), true), 'Custom group membership uses the shared native role criterion');
+$features->replaceAll(['wordpressdemoaudiencefeature'=>['group'=>'reviewers']], array_map(static fn($g) => $g->name, $groups->getGroups()));
+$rejected = false;
+try { $groups->remove('reviewers'); } catch (InvalidArgumentException) { $rejected = true; }
+verify($rejected, 'Custom group referenced by feature cannot be removed');
+$GLOBALS['who'] = 1;
+$native = new \Base3WordPress\Authorization\WordPressAuthorizationAdministrationService();
+$site = new \Base3\Authorization\Dto\ResourceReference('wordpress','site','global');
+verify(!$native->describe('wordpress', $site)->canWrite, 'WordPress native capability catalogue explicitly reports read-only');
+verify(count($native->getSubjects($site)) === 3 && count($native->getGrants($site)) > 0, 'Native roles and grants come from WordPress');
+$GLOBALS['who'] = 0;
+verify(in_array('anonymous', $names(), true), 'Anonymous visitor retains BASE3 anonymous group');
+verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Canonical global launcher default denies anonymous visitors');
+$features->replaceAll(['globalchatbotlauncherfeature' => []], array_map(static fn($g) => $g->name, $groups->getGroups()));
+verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to anonymous visitors');
+$GLOBALS['who'] = 2;
+verify(!$service->decide($permission('feature','globalchatbotlauncherfeature'))->isAllowed(), 'Explicit global launcher deny applies to authenticated visitors');
+$GLOBALS['who'] = 0;
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Unauthenticated visitor denied against non-public feature audience');
+echo 'WordPressAuthorizationSmokeTest OK' . PHP_EOL;
+
 $GLOBALS['users'][4] = new WP_User(4, 'other-site-admin', 'admin@example.org', ['administrator'], ['manage_options'=>true,'read'=>true]);
-$settings = new \Base3WordPressLab\Service\Base3WordPressLabSettings(new AudienceTestTranslation(), new AudienceTestLinks(), $manager);
+$featureTab = $map->getInstanceByInterfaceName(\UiFoundation\Api\ISettingsTab::class, 'authorizationfeaturessettingstab');
+$groupTab = $map->getInstanceByInterfaceName(\UiFoundation\Api\ISettingsTab::class, 'authorizationgroupssettingstab');
 $GLOBALS['who'] = 4;
-$reduced = $settings->getAdministrationConfig();
-verify(in_array('base3', array_column($reduced, 'name'), true), 'Non-development WordPress administrator retains reduced BASE3 tools');
-verify(!in_array('provider', array_column($reduced, 'name'), true), 'Provider tab removed from ordinary admin navigation');
-verify($settings->getAdministrationAccessLevel('authorizationgroupsdisplay') === 'development', 'Direct shared Groups AJAX requires development group');
-verify($settings->getAdministrationAccessLevel('authorizationfeaturesdisplay') === 'development', 'Direct shared Features AJAX requires development group');
-verify($settings->getAdministrationAccessLevel('tabcontroldisplay') === 'development', 'Generic nested tab composition is developer-only, not public AJAX');
-verify($settings->getAdministrationAccessLevel('pulsecoredisplay') === null, 'Games remain independently feature-authorized and embeddable');
+verify(in_array('development', $names(), true), 'Native WordPress administrator receives project development membership');
+verify($featureTab->isVisible(), 'Native WordPress administrator can see generic Features without an allowlist');
+verify($groupTab->getDisplayName() === 'authorizationgroupsdisplay', 'Shared group display is provided by generic settings discovery');
 $audiences = new \Base3WordPress\Authorization\WordPressAudienceAdministrationService($service, $manager, $groups, $features, $editor);
-$denied = false;
-try { $audiences->getGroupView(); } catch (\RuntimeException) { $denied = true; }
-verify($denied, 'Native site administrator without development cannot read group audiences');
+verify(isset($audiences->getGroupView()['entries'][0]), 'Native WordPress administrator can open shared Groups without an allowlist');
+verify(isset($audiences->getFeatureView()['rows'][0]), 'Native WordPress administrator can open shared Features without an allowlist');
 $GLOBALS['who'] = 2;
 $denied = false;
 try { $audiences->getFeatureView(); } catch (\RuntimeException) { $denied = true; }
 verify($denied, 'Native non-administrator cannot read feature audiences');
 $GLOBALS['who'] = 1;
-$full = $settings->getAdministrationConfig();
-verify(in_array('provider', array_column($full, 'name'), true), 'Code-owned developer receives full navigation');
-$base3 = $full[array_search('base3', array_column($full, 'name'), true)];
-verify(in_array('authorizationgroupsdisplay', array_column($base3['displays'], 'name'), true)
-	&& in_array('authorizationfeaturesdisplay', array_column($base3['displays'], 'name'), true), 'Shared ClientStack Groups/Features appear in full BASE3 navigation');
-verify(!in_array('base3wordpressaudienceadmindisplay', array_column($base3['displays'], 'name'), true), 'Legacy WordPress audience display not present in navigation');
+verify($featureTab->isVisible(), 'Code-owned developer can access generic feature settings');
+verify($featureTab->getParentTabName() === 'base3settingstab', 'Feature editor is nested below canonical BASE3 root');
+verify($featureTab->getDisplayName() === 'authorizationfeaturesdisplay', 'Generic features settings routes to shared display');
 $groupView = $audiences->getGroupView();
 $featureView = $audiences->getFeatureView();
 verify(isset($groupView['criterionOptions'][0]['name']) && isset($featureView['rows'][0]['rules']), 'Shared UI receives exact group and feature data contracts');
@@ -276,13 +275,13 @@ $session = new AudienceTestSession();
 $_GET = [];
 $_POST = [];
 $display = new \ClientStack\Display\AuthorizationGroupsDisplay(
-	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
 );
 $html = $display->getOutput('html', true);
 verify(str_contains($html, 'data-base3-display="authorizationgroupsdisplay"') && str_contains($html, 'reviewers'), 'Shared ClientStack Groups template renders existing WordPress groups');
 $_POST = ['base3_group_action'=>'create', 'base3_group_csrf'=>$session->get('authorization.groups.csrf'), 'base3_group_name'=>'webteam', 'base3_group_description'=>'Website team'];
 $display = new \ClientStack\Display\AuthorizationGroupsDisplay(
-	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
 );
 $createdHtml = $display->getOutput('html', true);
 verify(str_contains($createdHtml, 'BASE3 group created.') && str_contains($createdHtml, 'webteam'), 'Shared CSRF-protected Groups display creates WordPress-managed group');
@@ -307,28 +306,46 @@ try { $audiences->removeGroup('webteam'); } catch (InvalidArgumentException) { $
 verify($disallowed, 'Managed fallback group cannot be removed while referenced');
 $_POST = [];
 $featureDisplay = new \ClientStack\Display\AuthorizationFeaturesDisplay(
-	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
 );
 $featureHtml = $featureDisplay->getOutput('html', true);
-verify(str_contains($featureHtml, 'data-base3-display="authorizationfeaturesdisplay"') && str_contains($featureHtml, 'pulsecoreplayfeature'), 'Shared ClientStack Features template renders WordPress features');
+verify(str_contains($featureHtml, 'data-base3-display="authorizationfeaturesdisplay"') && str_contains($featureHtml, 'wordpressdemoaudiencefeature'), 'Shared ClientStack Features template renders WordPress features');
 $_POST = ['base3_feature_action'=>'save', 'base3_feature_csrf'=>$session->get('authorization.features.csrf'),
-	'base3_feature_rules'=>['pulsecoreplayfeature'=>[['kind'=>'criterion', 'value'=>'wordpressrolecriterion', 'config'=>'{"roles":["editor"]}']]]];
+	'base3_feature_rules'=>[
+		'wordpressdemoaudiencefeature'=>[['kind'=>'criterion', 'value'=>'wordpressrolecriterion', 'config'=>'{"roles":["editor"]}']],
+		'authorizationgroupssettingstab'=>[['kind'=>'group', 'value'=>'administration']],
+		'authorizationfeaturessettingstab'=>[['kind'=>'group', 'value'=>'development']]
+	]];
 $featureDisplay = new \ClientStack\Display\AuthorizationFeaturesDisplay(
-	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
 );
 verify(str_contains($featureDisplay->getOutput('html', true), 'Feature audiences saved.'), 'Shared CSRF-protected Features display saves WordPress feature audience');
 $GLOBALS['who'] = 2;
-verify($service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Updated shared feature audience matches WordPress native role');
+verify($service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Updated shared feature audience matches WordPress native role');
 $GLOBALS['who'] = 1;
-verify(!$service->decide($permission('feature','pulsecoreplayfeature'))->isAllowed(), 'Updated shared feature audience excludes other roles');
+verify(!$service->decide($permission('feature','wordpressdemoaudiencefeature'))->isAllowed(), 'Updated shared feature audience excludes other roles');
 $GLOBALS['who'] = 4;
 $_POST = [];
 http_response_code(200);
 $display = new \ClientStack\Display\AuthorizationGroupsDisplay(
-	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks()
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
 );
-verify(str_contains($display->getOutput('html', true), 'unavailable') && http_response_code() === 403,
-	'Native site administrator without BASE3 development cannot open direct shared group editor');
+$out4 = $display->getOutput('html', true);
+verify(str_contains($out4, 'data-base3-display="authorizationgroupsdisplay"') && http_response_code() === 200,
+	'Native WordPress administrator opens the direct shared Groups display');
+$featureDisplay = new \ClientStack\Display\AuthorizationFeaturesDisplay(
+	$service, $audiences, \Base3\Core\Request::fromGlobals(), $session, new AudienceTestView(), new AudienceTestLinks(), new \Base3WordPress\Test\Support\AudienceTestAssetResolver()
+);
+verify(str_contains($featureDisplay->getOutput('html', true), 'data-base3-display="authorizationfeaturesdisplay"'),
+	'Native WordPress administrator opens the direct shared Features display');
+$GLOBALS['who'] = 2;
+$denied = false;
+try { $audiences->getGroupView(); } catch (\RuntimeException) { $denied = true; }
+verify($denied, 'Native WordPress editor without manage_options cannot edit audiences');
+verify(!in_array('development', $names(), true), 'Native WordPress editor never receives project development membership');
+
+verify(!is_file(dirname(__DIR__, 3) . '/Base3WordPressLab/src/Feature/GlobalChatbotLauncherFeature.php'),
+	'Removed WordPressLab launcher feature cannot shadow the canonical ClientStack feature');
 echo 'WordPress project navigation and display tests OK' . PHP_EOL;
 
 ob_end_flush();
